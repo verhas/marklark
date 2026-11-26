@@ -3,6 +3,10 @@
 All I/O in CODE goes through these functions; the host records every read with its hash. Everything here
 is **[proposed]** — names and signatures are a first cut.
 
+**Implemented** (2026-11-26): `read`, `slice`, `glob`, `json`, `toml`, `re_search`, `re_findall`, `re_sub`,
+`reindent`, `fence`, `headings`, `anchor`, `here`, `document`, `define`, `var`, `emit`, `tasks`.
+Flags for the regex functions: `i`, `m`, `s`, `x`. Not yet: `xml`.
+
 The sizing question from the design discussion was: *can a small library cover everything mdship's
 placeholder family does?* If ~10–20 functions suffice, one programmable construct is clearly better than
 a placeholder zoo; if it took ~40, the placeholders were capturing more than it seemed. The mapping below
@@ -17,7 +21,7 @@ lands at **about 20 functions**, most of them small.
 | `read(path)` | str | Whole text file |
 | `slice(path, start=None, end=None, range=None, section=None, include_start=False, include_end=False, repeat=False)` | str | mdship INCLUDE/AI-dep slicing. A `start`/`end` that never matches is an error, never "include nothing". `repeat=True` concatenates every start/end segment |
 | `glob(pattern)` | list[str] | Sorted, inside the project root, gitignored files excluded |
-| `json(path)` / `yaml(path)` / `toml(path)` | value | Parsed structure |
+| `json(path)` / `toml(path)` | value | Parsed into plain data (TOML dates become strings). No `yaml()`: no YAML (D16) |
 | `xml(path, xmlns=None)` | value | Wrapped in the root element name; namespaces stripped unless mapped in `xmlns` (mdship IMPORT semantics) |
 
 ### Text helpers
@@ -26,9 +30,9 @@ Starlark has no regular expressions, so they must come from the host.
 
 | Function | Returns |
 |---|---|
-| `re_search(pattern, text, flags="")` | match or None (`.group(n)`, `.groups()`) |
-| `re_findall(pattern, text, flags="")` | list |
-| `re_sub(pattern, repl, text, count=0, flags="")` | str |
+| `re_search(pattern, text, flags="")` | None, or a struct: `text`, `groups` (list; None for groups that did not take part), `named` (dict), `start`, `end` (character offsets) |
+| `re_findall(pattern, text, flags="")` | list — like Python: strings without groups, the group with one, lists with several |
+| `re_sub(pattern, repl, text, count=0, flags="")` | str — in `repl`, `$1` / `${name}` refer to groups, `$$` is `$` |
 | `reindent(text, margin)` | str — mdship INCLUDE `margin` |
 | `fence(text, lang="")` | str — wraps in a code fence longer than any backtick run inside |
 
@@ -39,8 +43,8 @@ Starlark has no regular expressions, so they must come from the host.
 | `document()` | str — the current document text (§7.6 of the spec) |
 | `headings(min_level=1, max_level=6)` | list of `{level, text, line, anchor, path}` |
 | `anchor(text)` | str — the GitHub-style slug, same algorithm as `headings()` |
-| `front_matter()` | value or None |
-| `here()` | `{line, next_line, next_lines(n)}` — this block's position; covers mdship SUP |
+| ~~`front_matter()`~~ | dropped: front matter is YAML (D16) |
+| `here()` | `{line, next_line}` — this block's position (`next_line`: the first line after the block, or None); covers mdship SUP |
 
 ### Variables and output
 

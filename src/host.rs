@@ -8,6 +8,10 @@
 //! is converted on `define` and rebuilt on `var`, so defined values are deeply immutable and each block
 //! can run on its own Starlark heap.
 
+// `slice` mirrors mdship INCLUDE's options one to one, hence its many parameters; the
+// `#[starlark_module]` expansion does not carry item attributes, so this is module-wide.
+#![allow(clippy::too_many_arguments)]
+
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 
@@ -21,6 +25,7 @@ use starlark::values::none::NoneType;
 use starlark::values::structs::AllocStruct;
 use starlark::values::Value;
 
+use crate::extract::{self, Slice};
 use crate::fs::{ProjectPath, Sandbox};
 use crate::markdown::{self, Heading};
 
@@ -49,10 +54,22 @@ pub struct BlockCtx<'a> {
     pub base_dir: ProjectPath,
     /// The document as it stands now, including output spliced earlier in this update (spec §7.6).
     pub document: &'a str,
+    /// Where the running block is.
+    pub here: Here,
+}
+
+/// The running block's position, for `here()`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Here {
+    /// 1-based line of the block's opening comment.
+    pub line: usize,
+    /// The first document line after the block (after its closing marker, or after the opening comment
+    /// if it has none), without its line ending; `None` at the end of the document.
+    pub next_line: Option<String>,
 }
 
 impl<'a> BlockCtx<'a> {
-    pub fn new(shared: &'a Vars, sandbox: &'a Sandbox<'a>, base_dir: ProjectPath, document: &'a str) -> Self {
+    pub fn new(shared: &'a Vars, sandbox: &'a Sandbox<'a>, base_dir: ProjectPath, document: &'a str, here: Here) -> Self {
         BlockCtx {
             shared,
             local: RefCell::new(Vars::new()),
@@ -62,6 +79,7 @@ impl<'a> BlockCtx<'a> {
             sandbox,
             base_dir,
             document,
+            here,
         }
     }
 
@@ -80,10 +98,10 @@ fn ctx<'a>(eval: &'a Evaluator) -> &'a BlockCtx<'a> {
         .expect("marklark: evaluator has no block context")
 }
 
-/// The globals CODE runs with: the Starlark standard library (no `print`), structs, `json`, and the
-/// marklark host functions.
+/// The globals CODE runs with: the Starlark standard library (no `print`), `struct`, and the marklark
+/// host functions. Starlark's own `json` module is left out: `json(path)` is a host function.
 pub fn globals() -> Globals {
-    GlobalsBuilder::extended_by(&[LibraryExtension::StructType, LibraryExtension::Json])
+    GlobalsBuilder::extended_by(&[LibraryExtension::StructType])
         .with(marklark_host)
         .build()
 }
@@ -202,6 +220,144 @@ fn marklark_host(builder: &mut GlobalsBuilder) {
     /// Wraps `text` in a code fence longer than any backtick run inside it.
     fn fence(#[starlark(require = pos)] text: &str, #[starlark(default = "")] lang: &str) -> anyhow::Result<String> {
         Ok(markdown::fence(text, lang))
+    }
+
+    /// A piece of a text file, with mdship INCLUDE semantics: `range="x..y"`, `start`/`end` regexes
+    /// (with `include_start`, `include_end`, `repeat`), or a Markdown `section` title. A selector that
+    /// matches nothing is an error.
+    fn slice(
+        #[starlark(require = pos)] path: &str,
+        #[starlark(require = named)] start: Option<&str>,
+        #[starlark(require = named)] end: Option<&str>,
+        #[starlark(require = named)] range: Option<&str>,
+        #[starlark(require = named)] section: Option<&str>,
+        #[starlark(require = named, default = false)] include_start: bool,
+        #[starlark(require = named, default = false)] include_end: bool,
+        #[starlark(require = named, default = false)] repeat: bool,
+        eval: &mut Evaluator,
+    ) -> anyhow::Result<String> {
+        let c = ctx(eval);
+        let text = c.sandbox.read_text(&c.resolve(path)?)?;
+        let spec = Slice { start, end, range, section, include_start, include_end, repeat };
+        extract::slice(&text, &spec).map_err(|e| anyhow!("slice(\"{path}\"): {e}"))
+    }
+
+    /// Re-indents `text` so its least indented line has exactly `margin` spaces (mdship `margin`).
+    fn reindent(#[starlark(require = pos)] text: &str, #[starlark(require = pos)] margin: i32) -> anyhow::Result<String> {
+        if margin < 0 {
+            bail!("reindent: margin must not be negative");
+        }
+        Ok(extract::reindent(text, margin as usize))
+    }
+
+    /// The first match of `pattern` in `text`, or None. The match is a struct: `text`, `groups` (list,
+    /// None for groups that did not take part), `named` (dict), `start`, `end` (character offsets).
+    /// Flags: `i`, `m`, `s`, `x`.
+    fn re_search<'v>(
+        #[starlark(require = pos)] pattern: &str,
+        #[starlark(require = pos)] text: &str,
+        #[starlark(default = "")] flags: &str,
+        eval: &mut Evaluator<'v, '_, '_>,
+    ) -> anyhow::Result<Value<'v>> {
+        let re = extract::compile_with_flags(pattern, flags).map_err(|e| anyhow!(e))?;
+        let heap = eval.heap();
+        let Some(caps) = re.captures(text) else { return Ok(Value::new_none()) };
+        let whole = caps.get(0).expect("group 0 always exists");
+        let groups: Vec<Value<'v>> = (1..caps.len())
+            .map(|i| caps.get(i).map_or(Value::new_none(), |m| heap.alloc(m.as_str())))
+            .collect();
+        let named: serde_json::Map<String, serde_json::Value> = re
+            .capture_names()
+            .flatten()
+            .map(|n| (n.to_owned(), caps.name(n).map_or(serde_json::Value::Null, |m| m.as_str().into())))
+            .collect();
+        Ok(heap.alloc(AllocStruct([
+            ("text", heap.alloc(whole.as_str())),
+            ("groups", heap.alloc(AllocList(groups))),
+            ("named", heap.alloc(serde_json::Value::Object(named))),
+            ("start", heap.alloc(extract::char_offset(text, whole.start()) as i32)),
+            ("end", heap.alloc(extract::char_offset(text, whole.end()) as i32)),
+        ])))
+    }
+
+    /// All non-overlapping matches, like Python: without groups a list of strings, with one group a list
+    /// of that group, with several a list of lists.
+    fn re_findall<'v>(
+        #[starlark(require = pos)] pattern: &str,
+        #[starlark(require = pos)] text: &str,
+        #[starlark(default = "")] flags: &str,
+        eval: &mut Evaluator<'v, '_, '_>,
+    ) -> anyhow::Result<Value<'v>> {
+        let re = extract::compile_with_flags(pattern, flags).map_err(|e| anyhow!(e))?;
+        let heap = eval.heap();
+        let n = re.captures_len() - 1;
+        let group = |c: &regex::Captures, i: usize| c.get(i).map_or("", |m| m.as_str()).to_owned();
+        let items: Vec<Value<'v>> = re
+            .captures_iter(text)
+            .map(|c| match n {
+                0 => heap.alloc(group(&c, 0)),
+                1 => heap.alloc(group(&c, 1)),
+                _ => heap.alloc(AllocList((1..=n).map(|i| group(&c, i)))),
+            })
+            .collect();
+        Ok(heap.alloc(AllocList(items)))
+    }
+
+    /// Replaces matches of `pattern` (all, or the first `count`). In `repl`, `$1` / `${name}` refer to
+    /// groups and `$$` is a literal `$`.
+    fn re_sub(
+        #[starlark(require = pos)] pattern: &str,
+        #[starlark(require = pos)] repl: &str,
+        #[starlark(require = pos)] text: &str,
+        #[starlark(default = 0)] count: i32,
+        #[starlark(default = "")] flags: &str,
+    ) -> anyhow::Result<String> {
+        let re = extract::compile_with_flags(pattern, flags).map_err(|e| anyhow!(e))?;
+        Ok(re.replacen(text, count.max(0) as usize, repl).into_owned())
+    }
+
+    /// A JSON file parsed into plain data.
+    fn json<'v>(#[starlark(require = pos)] path: &str, eval: &mut Evaluator<'v, '_, '_>) -> anyhow::Result<Value<'v>> {
+        let c = ctx(eval);
+        let text = c.sandbox.read_text(&c.resolve(path)?)?;
+        let data: serde_json::Value = serde_json::from_str(&text).map_err(|e| anyhow!("json(\"{path}\"): {e}"))?;
+        Ok(eval.heap().alloc(data))
+    }
+
+    /// A TOML file parsed into plain data (dates become strings).
+    fn toml<'v>(#[starlark(require = pos)] path: &str, eval: &mut Evaluator<'v, '_, '_>) -> anyhow::Result<Value<'v>> {
+        let c = ctx(eval);
+        let text = c.sandbox.read_text(&c.resolve(path)?)?;
+        let data: toml::Value = toml::from_str(&text).map_err(|e| anyhow!("toml(\"{path}\"): {e}"))?;
+        Ok(eval.heap().alloc(toml_to_json(data)))
+    }
+
+    /// The running block's position: `line` (of its opening comment) and `next_line` (the first line
+    /// after the block, or None) — mdship SUP.
+    fn here<'v>(eval: &mut Evaluator<'v, '_, '_>) -> anyhow::Result<Value<'v>> {
+        let h = ctx(eval).here.clone();
+        let heap = eval.heap();
+        Ok(heap.alloc(AllocStruct([
+            ("line", heap.alloc(h.line as i32)),
+            ("next_line", h.next_line.map_or(Value::new_none(), |l| heap.alloc(l))),
+        ])))
+    }
+
+    /// The whole document as it stands now (spec §7.6).
+    fn document(eval: &mut Evaluator) -> anyhow::Result<String> {
+        Ok(ctx(eval).document.to_owned())
+    }
+}
+
+fn toml_to_json(v: toml::Value) -> serde_json::Value {
+    match v {
+        toml::Value::String(s) => s.into(),
+        toml::Value::Integer(i) => i.into(),
+        toml::Value::Float(f) => serde_json::Number::from_f64(f).map_or(serde_json::Value::Null, Into::into),
+        toml::Value::Boolean(b) => b.into(),
+        toml::Value::Datetime(d) => d.to_string().into(),
+        toml::Value::Array(a) => a.into_iter().map(toml_to_json).collect(),
+        toml::Value::Table(t) => t.into_iter().map(|(k, v)| (k, toml_to_json(v))).collect::<serde_json::Map<_, _>>().into(),
     }
 }
 

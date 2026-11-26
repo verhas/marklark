@@ -10,8 +10,9 @@ code deterministically. See [README.md](README.md) for the one-page summary.
 documents held in memory over a `FileSystem` abstraction (`MemoryFs`, `DiskFs`): blocks, stamps, groups,
 canonical AST hash, task declarations, the evaluation loop with block-local variables, splicing with
 `generated` guards, and a first set of host functions (`emit`, `define`, `var`, `read`, `glob`,
-`headings`, `anchor`, `fence`, `tasks`). CLI: `update`, `check`. Not yet: states (§9), `intent-check`,
-`intent-accept`, inline values, AI blocks, MCP server, remaining host functions, step limit.
+`headings`, `anchor`, `fence`, `tasks`, `slice`, `reindent`, `re_*`, `json`, `toml`, `here`,
+`document`), states (§9) and inline values (§7.7). CLI: `update [--strict]`, `check [--determinism]`,
+`intent-check [--strict] [--json]`, `intent-accept`. Not yet: AI blocks, MCP server, `xml()`, step limit.
 
 ## Where things stand
 

@@ -21,7 +21,8 @@ use starlark::eval::Evaluator;
 use crate::blocks::Kind;
 use crate::document::{DocError, Document, Parsed};
 use crate::fs::{FileSystem, RecordedRead, Sandbox};
-use crate::host::{self, Abort, BlockCtx, Vars};
+use crate::host::{self, Abort, BlockCtx, Here, Vars};
+use crate::inline::{self, InlineError};
 use crate::lang;
 use crate::splice::{self, IntegrityError};
 use crate::tasks::{self, DeclError, GraphError, TaskDecl};
@@ -73,6 +74,8 @@ pub enum UpdateError {
     /// A block's output would change the document's block structure.
     OutputBreaksBlocks { line: usize },
     DeadEnd(Vec<Stuck>),
+    /// Inline values that could not be filled (spec §7.7).
+    Inline(Vec<InlineError>),
 }
 
 impl fmt::Display for UpdateError {
@@ -91,6 +94,7 @@ impl fmt::Display for UpdateError {
                 f,
                 "CODE block at line {line}: its output contains a marklark block marker at the start of a line"
             ),
+            UpdateError::Inline(errors) => join_lines(f, errors),
             UpdateError::DeadEnd(stuck) => {
                 writeln!(f, "dead end: these CODE blocks can never run")?;
                 for s in stuck {
@@ -196,7 +200,8 @@ pub fn update(doc: &Document, fs: &dyn FileSystem) -> Result<UpdateResult, Updat
             }
             let block = current.blocks[i].clone();
             let body = block.body_text(&text).to_owned();
-            let ctx = BlockCtx::new(&vars, &sandbox, base_dir.clone(), &text);
+            let here = Here { line: block.line, next_line: line_after(&text, block.end()) };
+            let ctx = BlockCtx::new(&vars, &sandbox, base_dir.clone(), &text, here);
             let outcome = run_block(&doc_name, &block.line, &body, &globals, &ctx);
             let reads = sandbox.take_reads();
 
@@ -253,7 +258,20 @@ pub fn update(doc: &Document, fs: &dyn FileSystem) -> Result<UpdateResult, Updat
         }
     }
 
+    // 4. Inline values, after all CODE has run.
+    let text = inline::apply(&text, &current.blocks, &vars).map_err(UpdateError::Inline)?;
+
     Ok(UpdateResult { text, blocks: runs.into_values().collect(), vars })
+}
+
+/// The first full line after byte offset `end` (the rest of the line `end` is on is skipped).
+fn line_after(text: &str, end: usize) -> Option<String> {
+    let rest = &text[end..];
+    let after = &rest[rest.find('\n')? + 1..];
+    if after.is_empty() {
+        return None;
+    }
+    Some(after.split('\n').next().unwrap_or("").trim_end_matches('\r').to_owned())
 }
 
 /// Parses and runs one block body. An abort shows up here as an error and is told apart by the caller
@@ -412,6 +430,60 @@ mod tests {
             Err(UpdateError::Runtime { message, .. }) => assert!(message.contains("call stack overflow"), "{message}"),
             other => panic!("{other:?}"),
         }
+    }
+
+    /// Runs one emitting CODE body against `fs` and returns its output region.
+    fn emit_of(body: &str, fs: &MemoryFs) -> String {
+        let text = format!("<!--CODE\n{body}\n-->\n<!--/CODE-->\nNEXT LINE\n");
+        match run(&text, fs) {
+            Ok(r) => region(&r.text, 0),
+            Err(e) => panic!("{body}\n{e}"),
+        }
+    }
+
+    #[test]
+    fn host_functions() {
+        let fs = MemoryFs::new()
+            .with("src/App.java", "class App {\n    // START\n    int x = 1;\n    // END\n}\n")
+            .with("conf.json", r#"{"name": "app", "ports": [80, 443]}"#)
+            .with("Cargo.toml", "[package]\nname = \"demo\"\nversion = \"0.3.1\"\n")
+            .with("README.md", "# R\n## Install\nrun it\n## Use\nuse it\n");
+        let java = r#"emit(reindent(slice("src/App.java", start="// START", end="// END"), 0))"#;
+        assert_eq!(emit_of(java, &fs), "int x = 1;\n");
+        assert_eq!(emit_of(r#"emit(slice("README.md", section="install"))"#, &fs), "## Install\nrun it\n");
+        assert_eq!(emit_of(r#"emit(slice("README.md", range="1..1"))"#, &fs), "# R\n");
+        let c = r#"c = json("conf.json")
+emit(c["name"] + ":" + str(c["ports"][1]))"#;
+        assert_eq!(emit_of(c, &fs), "app:443\n");
+        assert_eq!(emit_of(r#"emit(toml("Cargo.toml")["package"]["version"])"#, &fs), "0.3.1\n");
+        let m = r#"m = re_search(r"v(?P<maj>\d+)\.(\d+)", "ver v12.4 x")
+emit("%s %s %s %d %d" % (m.text, m.groups[1], m.named["maj"], m.start, m.end))"#;
+        assert_eq!(emit_of(m, &fs), "v12.4 4 12 4 9\n");
+        assert_eq!(emit_of(r#"emit(str(re_search("zz", "abc")))"#, &fs), "None\n");
+        assert_eq!(emit_of(r#"emit(str(re_findall(r"(\w)=(\d)", "a=1 b=2")))"#, &fs), "[[\"a\", \"1\"], [\"b\", \"2\"]]\n");
+        assert_eq!(emit_of(r#"emit(re_sub(r"(\d+)", "<$1>", "a1b22", count=1))"#, &fs), "a<1>b22\n");
+        assert_eq!(emit_of(r#"emit(re_sub("A", "x", "aA", flags="i"))"#, &fs), "xx\n");
+        assert_eq!(emit_of(r#"h = here()
+emit(str(h.line) + " " + h.next_line)"#, &fs), "1 NEXT LINE\n");
+        assert!(emit_of(r#"emit(str(len(document()) > 0))"#, &fs).starts_with("True"));
+    }
+
+    #[test]
+    fn slice_that_matches_nothing_fails_loudly() {
+        let fs = MemoryFs::new().with("a.txt", "x\n");
+        let text = "<!--CODE\nemit(slice('a.txt', start='nope'))\n-->\n<!--/CODE-->\n";
+        match run(text, &fs) {
+            Err(UpdateError::Runtime { message, .. }) => assert!(message.contains("start pattern"), "{message}"),
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn inline_values_after_all_code() {
+        let text = "Version <!--$version-->?, name <!--= app.name-->?<!--/=-->.\n<!--CODE\ndefine('version', '2.0')\ndefine('app', {'name': 'My App'})\n-->\n";
+        let r = run(text, &MemoryFs::new()).unwrap();
+        assert!(r.text.starts_with("Version <!--$version-->2.0 name <!--= app.name-->My App<!--/=-->.\n"), "{}", r.text);
+        assert!(matches!(run("<!--$nope-->x\n", &MemoryFs::new()), Err(UpdateError::Inline(_))));
     }
 
     #[test]

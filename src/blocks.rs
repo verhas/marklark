@@ -232,7 +232,7 @@ fn line_start_of(doc: &str, pos: usize) -> usize {
 }
 
 /// Byte ranges of fenced and indented code blocks and of inline code spans.
-fn code_ranges(doc: &str) -> Vec<Range<usize>> {
+pub(crate) fn code_ranges(doc: &str) -> Vec<Range<usize>> {
     let mut ranges: Vec<Range<usize>> = Parser::new_ext(doc, Options::empty())
         .into_offset_iter()
         .filter_map(|(event, range)| match event {

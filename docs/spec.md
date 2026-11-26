@@ -249,8 +249,11 @@ Values can be shown inside running text (D25):
 - `<!--= expr-->value<!--/=-->` — the long form; the value may contain anything except the closing
   marker.
 
-[proposed] `var` is a dotted variable path (`app.version`); `expr` is a dotted path too, perhaps a small
-Starlark expression later. Inline values are evaluated after all CODE has run.
+[proposed] Both forms take a variable path: a name followed by `.key` and `[index]` steps
+(`app.version`, `ports[0]`). The value must be a string, number or bool (bools render as `true` /
+`false`). Inline values are filled after all CODE has run. References inside code blocks, code spans,
+marklark block comments and output regions are left alone. An undefined variable, a non-scalar value, or
+a long form without its closing marker fails the update with the line.
 
 ### 7.8 Determinism check
 
