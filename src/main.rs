@@ -8,7 +8,8 @@ use clap::{Parser, Subcommand};
 use marklark::document::Document;
 use marklark::eval::{self, UpdateError};
 use marklark::fs::DiskFs;
-use marklark::state::{self, Finding, Severity};
+use marklark::ai;
+use marklark::state::{self, AcceptError, Finding, Severity};
 
 /// Exit codes (D35): stable once released.
 mod exit {
@@ -230,7 +231,11 @@ fn intent_check_file(file: &Path, strict: bool, print: bool) -> (u8, serde_json:
             return (exit::IO, serde_json::json!({ "file": path, "error": e }));
         }
     };
-    let findings = match state::analyze(&doc) {
+    let findings = match state::analyze(&doc).and_then(|mut f| {
+        f.extend(ai::analyze(&doc, &fs)?);
+        f.sort_by_key(|x| x.line);
+        Ok(f)
+    }) {
         Ok(f) => f,
         Err(errors) => {
             let messages: Vec<String> = errors.iter().map(ToString::to_string).collect();
@@ -264,11 +269,18 @@ fn intent_check_file(file: &Path, strict: bool, print: bool) -> (u8, serde_json:
 }
 
 fn intent_accept_file(file: &Path, line: usize, drop_stamp: bool, backup: Backup) -> u8 {
-    let (_, doc) = match load(file) {
+    let (fs, doc) = match load(file) {
         Ok(x) => x,
         Err(e) => return fail(exit::IO, &e),
     };
-    let result = if drop_stamp { state::drop_stamps(&doc, line) } else { state::accept(&doc, line) };
+    let result = if drop_stamp {
+        state::drop_stamps(&doc, line).map_err(|e| e.to_string())
+    } else {
+        match state::accept(&doc, line) {
+            Err(AcceptError::AiBlock { line }) => ai::accept(&doc, &fs, line).map_err(|e| e.to_string()),
+            other => other.map_err(|e| e.to_string()),
+        }
+    };
     match result {
         Ok(text) if text == doc.text => exit::OK,
         Ok(text) => write_document(file, &doc.text, &text, backup),

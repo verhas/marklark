@@ -2,6 +2,7 @@
 //!
 //! The specification lives in `docs/spec.md`; decisions in `docs/decisions.md`.
 
+pub mod ai;
 pub mod blocks;
 pub mod canon;
 pub mod document;

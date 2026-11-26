@@ -298,6 +298,8 @@ Computed deterministically, per group:
 | `params_edited` | a member's `params` stamp ≠ its code | runs | warning | error |
 | `orphan` | a CODE block with an `intent` stamp that belongs to no group | runs | warning | error |
 | `broken` | a member fails at run time (missing file, no match, …) | fails | error | error |
+| `needs_update` [proposed] | an AI block's inputs changed, or it has no dependencies yet (§12) | — | warning | error |
+| `output_edited` [proposed] | an AI block's text was edited by hand (§12) | — | error | error |
 | `verified` | everything matches and runs | runs | — | — |
 
 `update` never blocks on intent drift: the document builds as it did before. The hard failures in
@@ -375,3 +377,10 @@ Follow the style in docs/brief.md.
 - **Boundary**: content always ends at `<!--/AI-->`, written by marklark's apply tool together with the
   block. No `_terminate_`, no heading-based boundary.
 - **Not carried over** from mdship: YAML (D16), `brief:`, `_terminate_`.
+- **Creation** [proposed]: a human writes the empty `<!--AI--> <!--/AI-->` after the INTENT — making a
+  region generative is the user's decision (D13). Agents fill it in; they never insert one.
+- **`dep` restriction** [proposed]: because a `dep` line is human-editable text that marklark evaluates,
+  it must be a single `read(...)` or `slice(...)` call with literal arguments, on one line. It runs in
+  the same sandbox as CODE, with paths relative to the document.
+- **States** (§9): `unverified` and `intent_changed` as for CODE; edited `dep` lines are reported as
+  `params_edited`; changed inputs as `needs_update`; hand-edited text as `output_edited`.

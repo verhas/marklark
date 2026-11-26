@@ -264,6 +264,28 @@ pub fn update(doc: &Document, fs: &dyn FileSystem) -> Result<UpdateResult, Updat
     Ok(UpdateResult { text, blocks: runs.into_values().collect(), vars })
 }
 
+/// Evaluates one Starlark expression that returns a string — e.g. an AI block's `read(...)` or
+/// `slice(...)` dependency — with the same host functions and sandbox as CODE, and no variables.
+/// Returns the string and the reads it made.
+pub fn eval_string(
+    expr: &str,
+    doc: &Document,
+    fs: &dyn FileSystem,
+) -> Result<(String, Vec<RecordedRead>), String> {
+    let globals = host::globals();
+    let sandbox = Sandbox::new(fs);
+    let vars = Vars::new();
+    let ctx = BlockCtx::new(&vars, &sandbox, doc.base_dir(), &doc.text, Here::default());
+    let ast = lang::parse("dep", &format!("emit({expr})\n")).map_err(|e| e.message)?;
+    Module::with_temp_heap(|module| {
+        let mut eval = Evaluator::new(&module);
+        eval.extra = Some(&ctx);
+        eval.eval_module(ast, &globals).map(|_| ())
+    })
+    .map_err(|e| e.to_string())?;
+    Ok((ctx.output.take(), sandbox.take_reads()))
+}
+
 /// The first full line after byte offset `end` (the rest of the line `end` is on is skipped).
 fn line_after(text: &str, end: usize) -> Option<String> {
     let rest = &text[end..];

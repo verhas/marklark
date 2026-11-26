@@ -29,6 +29,10 @@ pub enum State {
     Orphan,
     /// A member fails at run time.
     Broken,
+    /// An AI block's inputs changed (or it has none yet): its text must be regenerated.
+    NeedsUpdate,
+    /// An AI block's text was edited by hand; regeneration is blocked until it is accepted.
+    OutputEdited,
 }
 
 impl State {
@@ -41,6 +45,8 @@ impl State {
             State::ParamsEdited => "params_edited",
             State::Orphan => "orphan",
             State::Broken => "broken",
+            State::NeedsUpdate => "needs_update",
+            State::OutputEdited => "output_edited",
         }
     }
 }
@@ -77,8 +83,8 @@ pub fn severity(state: State, command: Command, strict: bool) -> Severity {
         (_, Broken) => Error,
         (Command::Update, Unresolved | Detached) => Warning,
         (Command::Update, _) => Ok,
-        (Command::IntentCheck, Unresolved | Detached | IntentChanged) => Error,
-        (Command::IntentCheck, Unverified | ParamsEdited | Orphan) => Warning,
+        (Command::IntentCheck, Unresolved | Detached | IntentChanged | OutputEdited) => Error,
+        (Command::IntentCheck, Unverified | ParamsEdited | Orphan | NeedsUpdate) => Warning,
     }
 }
 
@@ -220,6 +226,8 @@ pub enum AcceptError {
     NoIntent { line: usize },
     /// A member's code does not parse, so it cannot be stamped.
     Unparsable { line: usize, message: String },
+    /// The group is an AI block: accept it with `ai::accept`, which also rehashes its inputs.
+    AiBlock { line: usize },
 }
 
 impl fmt::Display for AcceptError {
@@ -232,6 +240,7 @@ impl fmt::Display for AcceptError {
             AcceptError::NoBlock { line } => write!(f, "line {line}: no INTENT, CODE or AI block here"),
             AcceptError::NoIntent { line } => write!(f, "line {line}: this block is not governed by an INTENT"),
             AcceptError::Unparsable { line, message } => write!(f, "line {line}: the code does not parse: {message}"),
+            AcceptError::AiBlock { line } => write!(f, "line {line}: this is an AI block; accept it with ai::accept"),
         }
     }
 }
@@ -239,7 +248,7 @@ impl fmt::Display for AcceptError {
 impl std::error::Error for AcceptError {}
 
 /// The index of the block that starts at or contains `line`.
-fn block_at(parsed: &Parsed, text: &str, line: usize) -> Option<usize> {
+pub(crate) fn block_at(parsed: &Parsed, text: &str, line: usize) -> Option<usize> {
     let line_of_end = |end: usize| text[..end].matches('\n').count() + 1;
     parsed.blocks.iter().position(|b| b.line <= line && line <= line_of_end(b.end().max(b.open.end)))
 }
@@ -255,18 +264,17 @@ pub fn accept(doc: &Document, line: usize) -> Result<String, AcceptError> {
     if group.members.is_empty() {
         return Err(AcceptError::NoBlock { line });
     }
+    if let Some(&ai) = group.members.iter().find(|&&m| parsed.blocks[m].kind == Kind::Ai) {
+        return Err(AcceptError::AiBlock { line: parsed.blocks[ai].line });
+    }
     let intent = stamps::intent_digest(parsed.blocks[group.intent].body_text(text));
 
     let mut updates = Vec::new();
     for &m in &group.members {
         let block = &parsed.blocks[m];
-        let mut set: Vec<(&str, String)> = vec![("intent", intent.clone())];
-        if block.kind == Kind::Code {
-            let params = canon::params_digest(block.body_text(text))
-                .map_err(|e| AcceptError::Unparsable { line: block.line, message: e.message })?;
-            set.push(("params", params));
-        }
-        updates.push((m, set));
+        let params = canon::params_digest(block.body_text(text))
+            .map_err(|e| AcceptError::Unparsable { line: block.line, message: e.message })?;
+        updates.push((m, vec![("intent", intent.clone()), ("params", params)]));
     }
     let mut out = text.clone();
     // From the last block to the first, so earlier byte ranges stay valid.
