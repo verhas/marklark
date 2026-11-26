@@ -1,0 +1,22 @@
+[package]
+name = "marklark"
+version = "0.0.0"
+edition = "2024"
+description = "Maintain Markdown documents: humans write intents, agents write hermetic Starlark, marklark runs it deterministically"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/verhas/marklark"
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "marklark"
+path = "src/main.rs"
+
+[dependencies]
+# Pinned exactly: the AST hash uses marklark's own printer (D20), but dialect behaviour is still
+# verified during development (D23).
+starlark = "=0.14.3"
+starlark_syntax = "=0.14.2"
+blake3 = "1"
