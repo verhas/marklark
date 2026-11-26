@@ -11,6 +11,7 @@ pub mod document;
 pub mod eval;
 pub mod extract;
 pub mod fs;
+pub mod guide;
 pub mod host;
 pub mod inline;
 pub mod lang;

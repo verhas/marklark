@@ -11,7 +11,7 @@
 use std::fmt;
 use std::ops::Range;
 
-use pulldown_cmark::{Event, Options, Parser, Tag};
+use pulldown_cmark::{Event, Parser, Tag};
 
 /// The kinds of marklark block.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -286,12 +286,12 @@ fn line_start_of(doc: &str, pos: usize) -> usize {
     doc[..pos].rfind('\n').map_or(0, |i| i + 1)
 }
 
-/// Byte ranges of fenced and indented code blocks and of inline code spans.
+/// Byte ranges of fenced and indented code blocks, inline code spans, and YAML front matter.
 pub(crate) fn code_ranges(doc: &str) -> Vec<Range<usize>> {
-    let mut ranges: Vec<Range<usize>> = Parser::new_ext(doc, Options::empty())
+    let mut ranges: Vec<Range<usize>> = Parser::new_ext(doc, crate::markdown::parser_options())
         .into_offset_iter()
         .filter_map(|(event, range)| match event {
-            Event::Start(Tag::CodeBlock(_)) | Event::Code(_) => Some(range),
+            Event::Start(Tag::CodeBlock(_) | Tag::MetadataBlock(_)) | Event::Code(_) => Some(range),
             _ => None,
         })
         .collect();

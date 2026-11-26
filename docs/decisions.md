@@ -87,6 +87,8 @@ is always an error in `intent-check`. `update` never blocks on intent drift.
 
 *Reasoning*: making a region generative instead of deterministic is the user's decision, not the agent's.
 
+*Superseded by D39*: the decision stays the user's, but the agent creates the block through MCP.
+
 ## D14. Evaluation: repeat until done, with tasks
 
 - A block may declare the tasks it takes part in with a single call at its start:
@@ -361,3 +363,16 @@ length counts Unicode characters (not bytes), and the hash is over the UTF-8 of 
 
 *Reasoning*: the stamp must survive a CRLF/LF conversion and a re-encoding of the file (mdship also
 counted characters). A byte count or a hash of raw bytes would turn either into a false "hand edit".
+
+## D39. The agent creates the AI block when the human asks for prose (supersedes D13)
+
+The agent never chooses generated prose on its own. When the human asks for it — in the INTENT ("write a
+summary …") or in the request to the agent — the agent creates the AI block through MCP: `ai_resolve` on
+an INTENT that has no block yet inserts the empty `<!--AI--> <!--/AI-->` after it and stores the
+dependencies. `ai_resolve` refuses when the INTENT already has CODE: turning a deterministic intent into
+prose is the human's call, so the human removes the CODE first.
+
+*Reasoning*: D13 protected the decision (generative vs. deterministic), but in practice it made the human
+type a structural marker — mechanics the computer should do. Worse, with no tool to create the block, an
+agent told to use only MCP edited the file directly. The decision is now expressed in prose, where the
+human already expresses everything else, and the whole AI flow runs through MCP.

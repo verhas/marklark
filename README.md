@@ -34,8 +34,8 @@ The `#@` stamps record that the code was checked against the intent (`intent`, `
 generated (`generated`). When a human edits the intent, the code, or the generated text, marklark notices
 and says so — it never silently overwrites a human edit.
 
-A region can also be **generative**: an empty `<!--AI--> <!--/AI-->` block after an INTENT is filled
-with prose by an agent, from dependencies marklark extracts and hashes, and is flagged for regeneration
+A region can also be **generative**: when the INTENT asks for prose, the agent answers it with an
+`<!--AI-->` block, written from dependencies marklark extracts and hashes, and flagged for regeneration
 when those inputs change.
 
 ## Install
@@ -55,6 +55,7 @@ marklark check --determinism FILE...    # run every update twice and compare
 marklark intent-check FILE...           # report intent states (unresolved, intent_changed, params_edited, …)
 marklark intent-accept FILE --line N    # a human confirms the code (or AI text) still fits its INTENT
 marklark mcp                            # MCP server on stdin/stdout, for agents
+marklark skill [--user]                 # install the guide for agents as a Claude Code skill
 ```
 
 `--strict` turns every intent state other than verified into an error; `--json` prints machine-readable
@@ -68,7 +69,10 @@ claude mcp add marklark -- marklark mcp
 ```
 
 The tools: `intent_list`, `intent_context`, `intent_apply`, `intent_check`, `update`, `ai_resolve`,
-`ai_context`, `ai_update`, `list_headings`, `get_section`, `get_lines`.
+`ai_context`, `ai_update`, `guide`, `list_headings`, `get_section`, `get_lines`. The guide for agents
+([docs/agent-guide.md](docs/agent-guide.md)) is served by the `guide` tool and as the resource
+`marklark://guide`, and `marklark skill` installs it as a Claude Code skill. See
+[examples/](examples/README.md) for a walkthrough.
 
 ## What CODE can do
 
@@ -102,6 +106,7 @@ mdship remains maintained for environments where only `pip` installs are allowed
 |---|---|
 | [docs/spec.md](docs/spec.md) | The specification: constructs, stamps, states, evaluation model, security |
 | [docs/host-functions.md](docs/host-functions.md) | The host-function library, sized against every mdship feature |
+| [docs/agent-guide.md](docs/agent-guide.md) | The guide for agents: rules, workflow, Starlark subset, host functions, patterns |
 | [docs/decisions.md](docs/decisions.md) | Decision log with the reasoning behind each decision |
 | [docs/open-questions.md](docs/open-questions.md) | What is still undecided |
 | [docs/mdship-lessons.md](docs/mdship-lessons.md) | What to carry over from mdship (lessons, not code) |

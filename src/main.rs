@@ -68,6 +68,18 @@ enum Command {
     },
     /// Start the MCP server on stdin/stdout.
     Mcp,
+    /// Install the guide for agents as a Claude Code skill (.claude/skills/marklark/SKILL.md).
+    Skill {
+        /// Install for your user (~/.claude/skills) instead of the current project.
+        #[arg(long)]
+        user: bool,
+        /// Print the skill to stdout instead of installing it.
+        #[arg(long)]
+        print: bool,
+        /// Overwrite an installed skill that differs (e.g. one you edited).
+        #[arg(long)]
+        force: bool,
+    },
     /// Confirm that the blocks governed by an INTENT still fit it: re-stamp them.
     IntentAccept {
         file: PathBuf,
@@ -122,6 +134,7 @@ fn main() -> ExitCode {
                 println!("{}", serde_json::to_string_pretty(&serde_json::Value::Array(reports)).unwrap_or_default());
             }
         }
+        Command::Skill { user, print, force } => worst = install_skill(user, print, force),
         Command::Mcp => {
             if let Err(e) = mcp::serve() {
                 worst = fail(exit::IO, &format!("MCP server: {e}"));
@@ -327,6 +340,46 @@ fn intent_accept_file(file: &Path, line: usize, drop_stamp: bool, backup: Backup
 fn report(file: &Path, e: &UpdateError) -> u8 {
     eprintln!("{}: {e}", file.display());
     exit::DOCUMENT
+}
+
+/// `marklark skill`: writes the guide as `.claude/skills/marklark/SKILL.md`, in the current directory or
+/// under the home directory. An existing, different file is only replaced with `--force`, so local edits
+/// are not lost silently.
+fn install_skill(user: bool, print: bool, force: bool) -> u8 {
+    let content = marklark::guide::skill_md();
+    if print {
+        print!("{content}");
+        return exit::OK;
+    }
+    let base = if user {
+        match std::env::var_os("HOME") {
+            Some(home) => PathBuf::from(home),
+            None => return fail(exit::IO, "cannot find the home directory (HOME is not set)"),
+        }
+    } else {
+        PathBuf::from(".")
+    };
+    let path = base.join(".claude/skills/marklark/SKILL.md");
+    match std::fs::read_to_string(&path) {
+        Ok(existing) if existing == content => {
+            eprintln!("{}: already up to date", path.display());
+            return exit::OK;
+        }
+        Ok(_) if !force => {
+            return fail(exit::DOCUMENT, &format!("{} exists and differs; use --force to replace it", path.display()));
+        }
+        _ => {}
+    }
+    if let Some(dir) = path.parent()
+        && let Err(e) = std::fs::create_dir_all(dir)
+    {
+        return fail(exit::IO, &format!("{}: {e}", dir.display()));
+    }
+    if let Err(e) = std::fs::write(&path, content) {
+        return fail(exit::IO, &format!("{}: {e}", path.display()));
+    }
+    eprintln!("{}: installed", path.display());
+    exit::OK
 }
 
 fn fail(code: u8, message: &str) -> u8 {

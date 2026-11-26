@@ -120,7 +120,17 @@ impl<'a> BlockCtx<'a> {
         Ok(())
     }
 
+    /// Resolves a path argument. A string that cannot be a path — it has a line break or is very long —
+    /// is refused without echoing it: it is usually file content passed where a path belongs (e.g.
+    /// `toml(read("x.toml"))`), and the message must not leak that content.
     fn resolve(&self, path: &str) -> anyhow::Result<ProjectPath> {
+        if path.contains('\n') || path.chars().count() > 1024 {
+            bail!(
+                "expected a file path relative to the document, got text ({} characters); functions such as \
+                 read, slice, json, yaml, toml and xml take the path and read the file themselves",
+                path.chars().count()
+            );
+        }
         Ok(self.base_dir.join(path)?)
     }
 }
@@ -186,7 +196,8 @@ fn marklark_host(builder: &mut GlobalsBuilder) {
     }
 
     /// Reads a variable: this block's own definitions first, then the shared state. Without a default,
-    /// an undefined name aborts the block as not run yet (spec §7.4).
+    /// an undefined name aborts the block as not run yet (spec §7.4). The value is frozen: changing it
+    /// is an error, not a silent change to a private copy (D21).
     fn var<'v>(
         #[starlark(require = pos)] name: &str,
         #[starlark(require = named)] default: Option<Value<'v>>,
@@ -194,7 +205,7 @@ fn marklark_host(builder: &mut GlobalsBuilder) {
     ) -> anyhow::Result<Value<'v>> {
         let found = ctx(eval).lookup(name);
         match (found, default) {
-            (Some(data), _) => Ok(eval.heap().alloc(data)),
+            (Some(data), _) => Ok(eval.frozen_heap().alloc(data).to_value()),
             (None, Some(d)) => Ok(d),
             (None, None) => {
                 *ctx(eval).abort.borrow_mut() = Some(Abort::MissingVar(name.to_owned()));

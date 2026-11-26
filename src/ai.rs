@@ -15,11 +15,12 @@
 //! <!--/AI-->
 //! ```
 //!
-//! A human creates the (empty) AI block — making a region generative is the user's decision (D13).
-//! Then:
+//! Making a region generative is the human's decision, expressed in the INTENT or in the request to the
+//! agent; the agent never chooses prose on its own (D39). Then:
 //!
-//! - **resolution** ([`resolve`]): the agent derives the dependencies from the INTENT; marklark checks
-//!   and writes them as `dep` stamps, plus `intent` and `deps` (the hash of the dependency specs);
+//! - **resolution** ([`resolve`]): the agent derives the dependencies from the INTENT; marklark creates
+//!   the AI block after the INTENT if there is none yet, checks the dependencies and writes them as
+//!   `dep` stamps, plus `intent` and `deps` (the hash of the dependency specs);
 //! - **generation** ([`context`] then [`write`]): marklark extracts every dependency and gives the text
 //!   to the agent; the agent returns the prose; marklark writes it with each dependency's content hash
 //!   and the `generated` stamp. The agent never reads dependency files itself.
@@ -58,6 +59,10 @@ pub enum AiError {
     HandEdited { line: usize },
     /// The AI block has no dependencies yet: resolve it first.
     Unresolved { line: usize },
+    /// The line belongs to a different INTENT than the caller's `intent_hash` names (a stale line).
+    IntentMismatch { line: usize, found: String },
+    /// The INTENT is satisfied by CODE; turning it into prose is the human's decision (D39).
+    HasCode { line: usize },
 }
 
 impl fmt::Display for AiError {
@@ -67,7 +72,15 @@ impl fmt::Display for AiError {
                 let lines: Vec<String> = errors.iter().map(ToString::to_string).collect();
                 f.write_str(&lines.join("\n"))
             }
-            AiError::NoAiBlock { line } => write!(f, "line {line}: no AI block here"),
+            AiError::NoAiBlock { line } => write!(
+                f,
+                "line {line}: no AI block here (ai_resolve on the INTENT's line creates one, when the human asked for prose)"
+            ),
+            AiError::HasCode { line } => write!(
+                f,
+                "line {line}: this INTENT is satisfied by CODE; replacing code with prose is the human's decision, \
+                 so the human removes the CODE first"
+            ),
             AiError::NoIntent { line } => write!(f, "line {line}: this AI block has no INTENT before it"),
             AiError::BadDep { spec, message } => write!(f, "dependency `{spec}`: {message}"),
             AiError::Extract { spec, message } => write!(f, "dependency `{spec}` cannot be read: {message}"),
@@ -76,6 +89,11 @@ impl fmt::Display for AiError {
                 "line {line}: the AI block's text was edited by hand; accept it with intent-accept, or restore it"
             ),
             AiError::Unresolved { line } => write!(f, "line {line}: the AI block has no dependencies yet; resolve it first"),
+            AiError::IntentMismatch { line, found } => write!(
+                f,
+                "line {line} belongs to the INTENT \"{found}\", whose hash is not the one given; line numbers \
+                 shift whenever the document changes, so list the intents again. Nothing was changed"
+            ),
         }
     }
 }
@@ -176,6 +194,13 @@ struct Located {
     intent_text: String,
 }
 
+/// Locates the AI block and, with `expected_intent`, checks it is governed by that INTENT.
+fn locate_checked(doc: &Document, line: usize, expected_intent: Option<&str>) -> Result<Located, AiError> {
+    let located = locate(doc, line)?;
+    state::check_target(&located.intent_text, expected_intent).map_err(|found| AiError::IntentMismatch { line, found })?;
+    Ok(located)
+}
+
 fn locate(doc: &Document, line: usize) -> Result<Located, AiError> {
     let parsed = doc.parse().map_err(AiError::Document)?;
     let index = state::block_at(&parsed, &doc.text, line)
@@ -241,14 +266,51 @@ fn rewrite_block(
 /// Resolution: stores the dependencies the agent derived from the INTENT. Each spec is checked and
 /// test-extracted. Content hashes are left empty until the next generation; the `intent` and `deps`
 /// stamps are written now. Returns the new document text.
-pub fn resolve(doc: &Document, fs: &dyn FileSystem, line: usize, specs: &[String]) -> Result<String, AiError> {
-    let located = locate(doc, line)?;
+///
+/// With `expected_intent` (an `intent_hash` from a listing), refuses if the line belongs to another INTENT.
+pub fn resolve(
+    doc: &Document,
+    fs: &dyn FileSystem,
+    line: usize,
+    expected_intent: Option<&str>,
+    specs: &[String],
+) -> Result<String, AiError> {
+    let created = with_ai_block(doc, line, expected_intent)?;
+    let doc = created.as_ref().unwrap_or(doc);
+    let located = locate_checked(doc, line, expected_intent)?;
     let mut deps = Vec::new();
     for spec in specs {
         extract(doc, fs, spec)?;
         deps.push(Dep { spec: spec.trim().to_owned(), hash: None });
     }
     Ok(rewrite_block(doc, &located, &deps, None, None))
+}
+
+/// If `line` is on an INTENT that has no block yet, returns the document with an empty AI block
+/// inserted right after the INTENT (D39). An INTENT that has CODE is refused. Otherwise `None`.
+fn with_ai_block(doc: &Document, line: usize, expected_intent: Option<&str>) -> Result<Option<Document>, AiError> {
+    let parsed = doc.parse().map_err(AiError::Document)?;
+    let Some(at) = state::block_at(&parsed, &doc.text, line) else { return Ok(None) };
+    let Some(group) = parsed.group_of(at) else { return Ok(None) };
+    if group.members.iter().any(|&m| parsed.blocks[m].kind == Kind::Code) {
+        return Err(AiError::HasCode { line });
+    }
+    if !group.members.is_empty() {
+        return Ok(None);
+    }
+    let intent = &parsed.blocks[group.intent];
+    state::check_target(intent.body_text(&doc.text), expected_intent).map_err(|found| AiError::IntentMismatch { line, found })?;
+    let text = &doc.text;
+    let eol = splice::line_ending(text);
+    let at = text[intent.end()..].find('\n').map_or(text.len(), |i| intent.end() + i + 1);
+    let mut out = String::with_capacity(text.len() + 32);
+    out.push_str(&text[..at]);
+    if at == text.len() && !text.ends_with('\n') {
+        out.push_str(eol);
+    }
+    out.push_str(&format!("<!--AI{eol}-->{eol}<!--/AI-->{eol}"));
+    out.push_str(&text[at..]);
+    Ok(Some(Document { path: doc.path.clone(), text: out }))
 }
 
 /// One dependency with its current content, for the agent.
@@ -296,8 +358,16 @@ pub fn context(doc: &Document, fs: &dyn FileSystem, line: usize) -> Result<AiCon
 
 /// Generation, step 2: writes the agent's prose, recording every dependency's content hash and the
 /// `generated` stamp. Refuses to overwrite prose a human edited. Returns the new document text.
-pub fn write(doc: &Document, fs: &dyn FileSystem, line: usize, prose: &str) -> Result<String, AiError> {
-    let located = locate(doc, line)?;
+///
+/// With `expected_intent` (an `intent_hash` from a listing), refuses if the line belongs to another INTENT.
+pub fn write(
+    doc: &Document,
+    fs: &dyn FileSystem,
+    line: usize,
+    expected_intent: Option<&str>,
+    prose: &str,
+) -> Result<String, AiError> {
+    let located = locate_checked(doc, line, expected_intent)?;
     let block = &located.parsed.blocks[located.index];
     let stamps = &located.parsed.stamps[located.index];
     splice::check_guard(&doc.text, block, stamps).map_err(|_| AiError::HandEdited { line: block.line })?;
@@ -374,6 +444,8 @@ mod tests {
     use crate::fs::{MemoryFs, ProjectPath};
 
     const DOC: &str = "# Doc\n<!--INTENT\nSummarise the notes.\n-->\n<!--AI\n-->\n<!--/AI-->\ntail\n";
+    /// The same document before the agent created the AI block.
+    const BARE: &str = "# Doc\n<!--INTENT\nSummarise the notes.\n-->\ntail\n";
 
     fn fs() -> MemoryFs {
         MemoryFs::new().with("docs/notes.txt", "alpha\nbeta\n").with("docs/brief.md", "Be brief.\n")
@@ -392,8 +464,8 @@ mod tests {
 
     fn resolved_and_written(fs: &MemoryFs) -> String {
         let specs = vec![r#"read("notes.txt")"#.to_owned(), r#"read("brief.md")"#.to_owned()];
-        let resolved = resolve(&doc(DOC), fs, 5, &specs).unwrap();
-        write(&doc(&resolved), fs, 5, "Two notes: alpha and beta.").unwrap()
+        let resolved = resolve(&doc(DOC), fs, 5, None, &specs).unwrap();
+        write(&doc(&resolved), fs, 5, None, "Two notes: alpha and beta.").unwrap()
     }
 
     #[test]
@@ -440,7 +512,7 @@ mod tests {
 
         let edited = text.replace("Two notes", "2 notes");
         assert_eq!(findings(&edited, &fs), [State::OutputEdited]);
-        assert_eq!(write(&doc(&edited), &fs, 5, "new").unwrap_err(), AiError::HandEdited { line: 5 });
+        assert_eq!(write(&doc(&edited), &fs, 5, None, "new").unwrap_err(), AiError::HandEdited { line: 5 });
         let accepted = accept(&doc(&edited), &fs, 5).unwrap();
         assert!(findings(&accepted, &fs).is_empty());
     }
@@ -458,12 +530,39 @@ mod tests {
     }
 
     #[test]
+    fn resolve_creates_the_ai_block() {
+        let fs = fs();
+        let hash = stamps::intent_digest("Summarise the notes.");
+        let resolved = resolve(&doc(BARE), &fs, 2, Some(&hash), &[r#"read("notes.txt")"#.into()]).unwrap();
+        assert!(resolved.starts_with("# Doc\n<!--INTENT\nSummarise the notes.\n-->\n<!--AI\n#@ intent: "), "{resolved}");
+        assert!(resolved.ends_with("-->\n<!--/AI-->\ntail\n"), "{resolved}");
+        let written = write(&doc(&resolved), &fs, 2, Some(&hash), "Alpha and beta.").unwrap();
+        assert!(findings(&written, &fs).is_empty(), "{written}");
+        // A wrong hash creates nothing.
+        let wrong = stamps::intent_digest("other");
+        assert!(matches!(resolve(&doc(BARE), &fs, 2, Some(&wrong), &[]), Err(AiError::IntentMismatch { .. })));
+    }
+
+    #[test]
+    fn resolve_refuses_an_intent_with_code() {
+        let with_code = "<!--INTENT\nSummarise.\n-->\n<!--CODE\nx = 1\n-->\n";
+        assert_eq!(resolve(&doc(with_code), &fs(), 1, None, &[]).unwrap_err(), AiError::HasCode { line: 1 });
+    }
+
+    #[test]
     fn errors() {
         let fs = fs();
-        assert_eq!(write(&doc(DOC), &fs, 5, "x").unwrap_err(), AiError::Unresolved { line: 5 });
-        assert!(matches!(resolve(&doc(DOC), &fs, 5, &[r#"read("missing.txt")"#.into()]), Err(AiError::Extract { .. })));
-        assert!(matches!(resolve(&doc(DOC), &fs, 5, &[r#"read("../../etc/passwd")"#.into()]), Err(AiError::Extract { .. })));
-        assert_eq!(resolve(&doc(DOC), &fs, 1, &[]).unwrap_err(), AiError::NoAiBlock { line: 1 });
+        assert_eq!(write(&doc(DOC), &fs, 5, None, "x").unwrap_err(), AiError::Unresolved { line: 5 });
+        assert!(matches!(resolve(&doc(DOC), &fs, 5, None, &[r#"read("missing.txt")"#.into()]), Err(AiError::Extract { .. })));
+        assert!(matches!(resolve(&doc(DOC), &fs, 5, None, &[r#"read("../../etc/passwd")"#.into()]), Err(AiError::Extract { .. })));
+        assert_eq!(resolve(&doc(DOC), &fs, 1, None, &[]).unwrap_err(), AiError::NoAiBlock { line: 1 });
+        let wrong = stamps::intent_digest("Some other intent.");
+        assert_eq!(
+            resolve(&doc(DOC), &fs, 5, Some(&wrong), &[]).unwrap_err(),
+            AiError::IntentMismatch { line: 5, found: "Summarise the notes.".into() }
+        );
+        let right = stamps::intent_digest("Summarise the notes.");
+        assert!(resolve(&doc(DOC), &fs, 5, Some(&right), &[r#"read("notes.txt")"#.into()]).is_ok());
         let no_intent = "<!--AI\n-->\n<!--/AI-->\n";
         assert_eq!(context(&doc(no_intent), &fs, 1).unwrap_err(), AiError::NoIntent { line: 1 });
     }

@@ -7,7 +7,12 @@ use std::path::{Path, PathBuf};
 
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
-use rmcp::model::{CallToolResult, ContentBlock, Implementation, ServerCapabilities, ServerConfig};
+use rmcp::model::{
+    CallToolResult, ContentBlock, Implementation, ListResourcesResult, PaginatedRequestParams, ReadResourceRequestParams,
+    ReadResourceResponse, ReadResourceResult, Resource, ResourceContents, ServerCapabilities, ServerConfig,
+};
+use rmcp::service::RequestContext;
+use rmcp::RoleServer;
 use rmcp::{ErrorData, ServerHandler, ServiceExt, tool, tool_handler, tool_router};
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -20,6 +25,7 @@ use marklark::document::Document;
 use marklark::eval;
 use marklark::extract::{self, Slice};
 use marklark::fs::DiskFs;
+use marklark::guide::{GUIDE, GUIDE_URI};
 use marklark::markdown;
 use marklark::stamps;
 use marklark::state::{self, Finding};
@@ -32,7 +38,34 @@ prose; you satisfy them with <!--CODE--> blocks (hermetic Starlark run by markla
 intent and its current code, intent_apply to replace an intent's code (it is stamped and run before \
 anything is written). For AI blocks: ai_resolve stores the dependencies you derive from the INTENT \
 (read(...) / slice(...) calls), ai_context gives you their content, ai_update stores your prose. Never \
-edit stamps (#@ lines) or generated output by hand.";
+edit stamps (#@ lines) or generated output by hand. Write CODE by default; use an AI block only when the \
+human asks for prose (in the INTENT or the request): ai_resolve on the INTENT creates it.
+
+Before writing CODE, read the full guide: the `guide` tool or the resource marklark://guide (rules, \
+workflow, the Starlark subset, every host function, patterns).
+
+Every tool that writes takes `line` and `intent` (the intent_hash from intent_list / intent_context / \
+ai_context). Line numbers shift after every write; if the line no longer belongs to that intent, the \
+tool refuses and changes nothing — list the intents again.
+
+Host functions for CODE (paths are relative to the document; file functions take a PATH and read the \
+file themselves — pass \"data/app.toml\", not read(...)):
+  emit(text)                         append to the block's output (needs <!--/CODE-->, which intent_apply adds)
+  read(path) -> str                  whole text file
+  slice(path, start=, end=, range=\"x..y\", section=\"Title\", include_start=, include_end=, repeat=) -> str
+                                     a piece of a file: regex start/end lines, a line range, or a Markdown section;
+                                     a selector that matches nothing is an error
+  glob(pattern) -> [path]            matching files, sorted
+  json(path) / yaml(path) / toml(path) / xml(path, xmlns={name: url}) -> data
+  re_search(p, text, flags=) -> struct(text, groups, named, start, end) or None
+  re_findall(p, text, flags=) -> list    re_sub(p, repl, text, count=, flags=) -> str   (repl uses $1)
+  reindent(text, margin) -> str      fence(text, lang=) -> str (a code fence that fits the text)
+  headings(min_level=, max_level=) -> [struct(level, text, line, anchor, path)]   anchor(text) -> str
+  front_matter() -> data or None     here() -> struct(line, next_line)   document() -> str
+  define(name, value, lenient=False) publish plain data for other blocks (dotted names nest)
+  var(name, default=)                read it; without default, waits until some block defines it
+  tasks(depends_on=[...], completes=[...])   first statement only: order blocks by named tasks
+CODE must not contain the sequence --> anywhere (write \"--\" + \">\").";
 
 #[derive(Clone)]
 pub struct MarklarkServer {
@@ -59,6 +92,9 @@ pub struct ApplyArg {
     pub file: String,
     /// A line of the INTENT, or of one of the blocks it governs.
     pub line: usize,
+    /// The intent_hash of the INTENT you mean (from intent_list or intent_context). The tool refuses if
+    /// the line belongs to another INTENT.
+    pub intent: String,
     /// The bodies of the new CODE blocks (Starlark), in order. They replace every current block of the
     /// intent. A block that calls emit() gets an output region.
     pub blocks: Vec<String>,
@@ -73,6 +109,8 @@ pub struct ResolveArg {
     pub file: String,
     /// A line of the AI block or of its INTENT.
     pub line: usize,
+    /// The intent_hash of the AI block's INTENT (from intent_list or ai_context).
+    pub intent: String,
     /// Dependencies derived from the INTENT: each a single read("path") or slice("path", ...) call with
     /// literal arguments; paths are relative to the document.
     pub deps: Vec<String>,
@@ -84,6 +122,8 @@ pub struct AiUpdateArg {
     pub file: String,
     /// A line of the AI block or of its INTENT.
     pub line: usize,
+    /// The intent_hash of the AI block's INTENT (from intent_list or ai_context).
+    pub intent: String,
     /// The new prose for the AI block.
     pub text: String,
 }
@@ -146,6 +186,19 @@ fn all_findings(doc: &Document, fs: &DiskFs) -> Result<Vec<Finding>, String> {
     Ok(findings)
 }
 
+/// `the INTENT at line 6 ("State the application's name …")`.
+fn describe_target(target: Option<(usize, String)>) -> String {
+    match target {
+        Some((line, text)) => {
+            let first = text.lines().next().unwrap_or("");
+            let short: String = first.chars().take(80).collect();
+            let more = if short.len() < text.len() { " …" } else { "" };
+            format!("the INTENT at line {line} (\"{short}{more}\")")
+        }
+        None => "the INTENT".to_owned(),
+    }
+}
+
 fn join<T: ToString>(items: &[T]) -> String {
     items.iter().map(ToString::to_string).collect::<Vec<_>>().join("\n")
 }
@@ -197,6 +250,7 @@ impl MarklarkServer {
                 json!({
                     "line": block.line,
                     "intent": block.body_text(&doc.text).trim(),
+                    "intent_hash": stamps::intent_digest(block.body_text(&doc.text)),
                     "satisfied_by": kind,
                     "blocks": lines,
                     "states": findings_json(&mine, state::Command::IntentCheck),
@@ -272,9 +326,15 @@ impl MarklarkServer {
             Err(e) => return fail(e),
         };
         let extra: Vec<(String, String)> = a.stamps.into_iter().collect();
-        match apply::intent_apply(&doc, &fs, a.line, &a.blocks, &extra) {
+        let target = state::intent_at(&doc, a.line);
+        match apply::intent_apply(&doc, &fs, a.line, Some(&a.intent), &a.blocks, &extra) {
             Ok(text) => match save(&file, &doc.text, &text) {
-                Ok(()) => ok_text(format!("{}: applied {} block(s) and updated the document", a.file, a.blocks.len())),
+                Ok(()) => ok_text(format!(
+                    "{}: applied {} block(s) to {} and updated the document. Line numbers below it have shifted.",
+                    a.file,
+                    a.blocks.len(),
+                    describe_target(target)
+                )),
                 Err(e) => fail(e),
             },
             Err(e) => fail(e.to_string()),
@@ -324,6 +384,7 @@ impl MarklarkServer {
             Ok(c) => ok_json(json!({
                 "line": c.line,
                 "intent": c.intent,
+                "intent_hash": stamps::intent_digest(&c.intent),
                 "deps": c.deps.iter().map(|d| json!({ "spec": d.spec, "content": d.content, "changed": d.changed })).collect::<Vec<_>>(),
                 "text": c.content,
                 "states": findings_json(&c.findings, state::Command::IntentCheck),
@@ -340,9 +401,15 @@ impl MarklarkServer {
             Ok(x) => x,
             Err(e) => return fail(e),
         };
-        match ai::resolve(&doc, &fs, a.line, &a.deps) {
+        let target = state::intent_at(&doc, a.line);
+        match ai::resolve(&doc, &fs, a.line, Some(&a.intent), &a.deps) {
             Ok(text) => match save(&file, &doc.text, &text) {
-                Ok(()) => ok_text(format!("{}: stored {} dependencies", a.file, a.deps.len())),
+                Ok(()) => ok_text(format!(
+                    "{}: stored {} dependencies for {}. Line numbers below it have shifted.",
+                    a.file,
+                    a.deps.len(),
+                    describe_target(target)
+                )),
                 Err(e) => fail(e),
             },
             Err(e) => fail(e.to_string()),
@@ -358,13 +425,25 @@ impl MarklarkServer {
             Ok(x) => x,
             Err(e) => return fail(e),
         };
-        match ai::write(&doc, &fs, a.line, &a.text) {
+        let target = state::intent_at(&doc, a.line);
+        match ai::write(&doc, &fs, a.line, Some(&a.intent), &a.text) {
             Ok(text) => match save(&file, &doc.text, &text) {
-                Ok(()) => ok_text(format!("{}: AI block updated", a.file)),
+                Ok(()) => ok_text(format!(
+                    "{}: updated the AI block of {}. Line numbers below it have shifted.",
+                    a.file,
+                    describe_target(target)
+                )),
                 Err(e) => fail(e),
             },
             Err(e) => fail(e.to_string()),
         }
+    }
+
+    /// The full guide for agents: rules, workflow, the Starlark subset, every host function with its
+    /// parameters, patterns and don'ts. Read it before writing CODE.
+    #[tool]
+    async fn guide(&self) -> Result<CallToolResult, ErrorData> {
+        ok_text(GUIDE)
     }
 
     /// The headings of a document: level, text, line, anchor.
@@ -410,8 +489,39 @@ impl MarklarkServer {
 
 #[tool_handler(router = self.tool_router)]
 impl ServerHandler for MarklarkServer {
+    async fn list_resources(
+        &self,
+        _request: Option<PaginatedRequestParams>,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<ListResourcesResult, ErrorData> {
+        Ok(ListResourcesResult::with_all_items(vec![
+            Resource::new(GUIDE_URI, "marklark-guide")
+                .with_title("marklark — guide for agents")
+                .with_description("Rules, workflow, the Starlark subset, every host function, patterns")
+                .with_mime_type("text/markdown"),
+        ]))
+    }
+
+    async fn read_resource(
+        &self,
+        request: ReadResourceRequestParams,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<ReadResourceResponse, ErrorData> {
+        if request.uri == GUIDE_URI {
+            let contents = ResourceContents::TextResourceContents {
+                uri: request.uri,
+                mime_type: Some("text/markdown".into()),
+                text: GUIDE.to_owned(),
+                meta: None,
+            };
+            Ok(ReadResourceResult::new(vec![contents]).into())
+        } else {
+            Err(ErrorData::resource_not_found(format!("no resource {}", request.uri), None))
+        }
+    }
+
     fn get_info(&self) -> ServerConfig {
-        ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
+        ServerConfig::new(ServerCapabilities::builder().enable_tools().enable_resources().build())
             .with_server_info(Implementation::new("marklark", env!("CARGO_PKG_VERSION")))
             .with_instructions(INSTRUCTIONS)
     }

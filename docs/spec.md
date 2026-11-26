@@ -228,8 +228,13 @@ it defined before the abort becomes visible. A finished block never runs again i
 later `lenient=True` redefinition does not affect blocks that already read the variable.
 
 [proposed] Values are plain data — none, bool, int, float, string, list, dict — copied on `define` and
-rebuilt on `var`. A defined value is therefore deeply immutable, and each block runs on its own
-Starlark heap. Functions and other non-data values cannot be defined.
+rebuilt, frozen, on `var`: changing a value read with `var` is an error (not a silent change to a private
+copy); a block builds a new value instead (`dict(v.items())`, `list(v)`) and publishes it with
+`define(..., lenient=True)`. `var` returns the value at the moment of the call — a snapshot, not a live
+view: after a block redefines a name, a value it read earlier keeps the old content; it reads the name
+again to see the new one. (This is what makes `define("xs", var("xs") + [item], lenient=True)` work.)
+Each block runs on its own Starlark heap. Functions and other non-data
+values cannot be defined.
 
 This makes variable passing an implicit dependency, so a `depends_on` task is only needed for dependencies no
 variable expresses (typically "the document's headings are final"). A misspelled variable surfaces as a
@@ -345,6 +350,15 @@ need not read whole files.
 (store dependencies), `ai_context` (prompt + extracted dependencies) and `ai_update` (store prose).
 `intent_apply` runs the whole update in memory first and writes nothing if it fails.
 
+[proposed] Every MCP tool that writes (`intent_apply`, `ai_resolve`, `ai_update`) takes, besides the
+`line`, the `intent` it is aimed at — the `intent_hash` that `intent_list`, `intent_context` and
+`ai_context` return. Line numbers shift with every write; a line that now belongs to another INTENT is
+refused and nothing changes. Success messages name the INTENT that was changed. The guide for agents
+(`docs/agent-guide.md`, compiled in) is served by the `guide` tool and the resource `marklark://guide`;
+`marklark skill [--user] [--print] [--force]` installs it as a Claude Code skill. (Found in real use: an
+agent applied three intents with line numbers from one listing, and the later calls silently replaced
+the first intent's code.) The server's instructions include a host-function reference.
+
 ## 12. AI blocks [decided]
 
 The `<!--AI-->` block is mdship's AI placeholder carried over by concept (D33, D36). `marklark update`
@@ -384,8 +398,9 @@ Follow the style in docs/brief.md.
 - **Boundary**: content always ends at `<!--/AI-->`, written by marklark's apply tool together with the
   block. No `_terminate_`, no heading-based boundary.
 - **Not carried over** from mdship: YAML (D16), `brief:`, `_terminate_`.
-- **Creation** [proposed]: a human writes the empty `<!--AI--> <!--/AI-->` after the INTENT — making a
-  region generative is the user's decision (D13). Agents fill it in; they never insert one.
+- **Creation** [decided] (D39): the agent creates the AI block, through `ai_resolve` on an INTENT that
+  has no block yet, but only when the human asked for prose — in the INTENT or in the request. It never
+  chooses prose on its own, and `ai_resolve` refuses on an INTENT that already has CODE.
 - **`dep` restriction** [proposed]: because a `dep` line is human-editable text that marklark evaluates,
   it must be a single `read(...)` or `slice(...)` call with literal arguments, on one line. It runs in
   the same sandbox as CODE, with paths relative to the document.

@@ -253,6 +253,27 @@ pub(crate) fn block_at(parsed: &Parsed, text: &str, line: usize) -> Option<usize
     parsed.blocks.iter().position(|b| b.line <= line && line <= line_of_end(b.end().max(b.open.end)))
 }
 
+/// The INTENT governing the block at (or containing) `line` — the INTENT itself or one of its blocks:
+/// its line and its text (trimmed).
+pub fn intent_at(doc: &Document, line: usize) -> Option<(usize, String)> {
+    let parsed = doc.parse().ok()?;
+    let at = block_at(&parsed, &doc.text, line)?;
+    let intent = &parsed.blocks[parsed.group_of(at)?.intent];
+    Some((intent.line, intent.body_text(&doc.text).trim().to_owned()))
+}
+
+/// Checks the intent a write is aimed at. `expected` is the `intent_hash` the caller got from a listing;
+/// line numbers shift whenever a document changes, so a stale line must not silently hit another
+/// INTENT. Returns the first line of the INTENT actually found when it does not match.
+pub fn check_target(intent_text: &str, expected: Option<&str>) -> Result<(), String> {
+    match expected {
+        Some(e) if e != stamps::intent_digest(intent_text) => {
+            Err(intent_text.trim().lines().next().unwrap_or("").to_owned())
+        }
+        _ => Ok(()),
+    }
+}
+
 /// `intent-accept`: a human confirms that the blocks governed by the INTENT at (or containing) `line`
 /// still fit it. Every CODE member gets fresh `intent` and `params` stamps; other stamps stay. Returns
 /// the new document text.

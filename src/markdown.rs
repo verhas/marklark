@@ -19,13 +19,19 @@ pub struct Heading {
     pub path: Vec<String>,
 }
 
+/// The parser options marklark uses everywhere: plain CommonMark plus YAML front matter (`---` blocks
+/// at the start), so front matter is never mistaken for a setext heading.
+pub fn parser_options() -> Options {
+    Options::ENABLE_YAML_STYLE_METADATA_BLOCKS
+}
+
 /// All headings, in document order.
 pub fn headings(doc: &str) -> Vec<Heading> {
     let mut out = Vec::new();
     let mut seen: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
     let mut current: Option<(u8, usize, String)> = None;
     let mut stack: Vec<(u8, String)> = Vec::new();
-    for (event, range) in Parser::new_ext(doc, Options::empty()).into_offset_iter() {
+    for (event, range) in Parser::new_ext(doc, parser_options()).into_offset_iter() {
         match event {
             Event::Start(Tag::Heading { level, .. }) => {
                 let line = doc[..range.start].matches('\n').count() + 1;
@@ -121,6 +127,12 @@ mod tests {
                 Heading { level: 2, text: "Getting started".into(), line: 11, anchor: "getting-started-1".into(), path: vec!["Title".into()] },
             ]
         );
+    }
+
+    #[test]
+    fn front_matter_is_not_a_heading() {
+        let texts: Vec<String> = headings("---\ntitle: T\n---\n# Doc\n").into_iter().map(|h| h.text).collect();
+        assert_eq!(texts, ["Doc"]);
     }
 
     #[test]

@@ -315,7 +315,20 @@ fn run_block(
         eval.extra = Some(ctx);
         eval.eval_module(ast, globals).map(|_| ())
     })
-    .map_err(|e| UpdateError::Runtime { line: *line, message: e.to_string() })
+    .map_err(|e| UpdateError::Runtime { line: *line, message: with_hint(e.to_string()) })
+}
+
+/// Adds marklark's explanation to Starlark errors whose own message does not say what to do.
+fn with_hint(message: String) -> String {
+    if message.lines().any(|l| l.trim() == "error: Immutable") {
+        format!(
+            "{message}\nhint: values read with var() are frozen — changing them would only change a private copy. \
+             Build a new value instead: d = dict(var(\"x\").items()) or xs = list(var(\"xs\")), then \
+             define(\"x\", d, lenient=True) to publish it."
+        )
+    } else {
+        message
+    }
 }
 
 #[cfg(test)]
@@ -392,6 +405,22 @@ mod tests {
         // A missing nested name aborts like a missing variable.
         let wait = "<!--CODE\nemit(var('app.version'))\n-->\n<!--/CODE-->\n<!--CODE\ndefine('app.name', 'x')\n-->\n";
         assert!(matches!(run(wait, &MemoryFs::new()), Err(UpdateError::DeadEnd(_))));
+    }
+
+    #[test]
+    fn values_from_var_are_frozen() {
+        let def = "<!--CODE\ndefine('m.version', '0.1.0')\ndefine('xs', [1])\n-->\n";
+        // Changing a value read with var() is an error — it would otherwise change only a copy.
+        for change in ["v = var('m')\nv['version'] = '0.2.0'", "xs = var('xs')\nxs.append(2)"] {
+            let text = format!("{def}<!--CODE\n{change}\n-->\n");
+            match run(&text, &MemoryFs::new()) {
+                Err(UpdateError::Runtime { message, .. }) => assert!(message.contains("hint: values read with var() are frozen"), "{message}"),
+                other => panic!("{change}: {other:?}"),
+            }
+        }
+        // Building a new value from it works: a changed copy, list aggregation.
+        let ok = format!("{def}<!--CODE\nd = dict(var('m').items())\nd['version'] = '0.2.0'\nys = list(var('xs'))\nys.append(3)\nemit(d['version'] + ' ' + str(var('xs') + [2]) + ' ' + str(ys) + ' ' + var('m')['version'])\n-->\n<!--/CODE-->\n");
+        assert_eq!(region(&run(&ok, &MemoryFs::new()).unwrap().text, 0), "0.2.0 [1, 2] [1, 3] 0.1.0\n");
     }
 
     #[test]
@@ -508,6 +537,20 @@ emit("%s %s %s %d %d" % (m.text, m.groups[1], m.named["maj"], m.start, m.end))"#
         assert_eq!(emit_of(r#"h = here()
 emit(str(h.line) + " " + h.next_line)"#, &fs), "1 NEXT LINE\n");
         assert!(emit_of(r#"emit(str(len(document()) > 0))"#, &fs).starts_with("True"));
+    }
+
+    #[test]
+    fn file_content_passed_as_path_is_not_echoed() {
+        let fs = MemoryFs::new().with("app.toml", "[app]\nsecret_looking = \"value-123\"\n");
+        let text = "<!--CODE\nemit(str(toml(read('app.toml'))))\n-->\n<!--/CODE-->\n";
+        match run(text, &fs) {
+            Err(UpdateError::Runtime { message, .. }) => {
+                assert!(message.contains("expected a file path"), "{message}");
+                // The source line in the traceback is fine; the file's content must not appear.
+                assert!(!message.contains("value-123"), "{message}");
+            }
+            other => panic!("{other:?}"),
+        }
     }
 
     #[test]

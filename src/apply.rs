@@ -29,6 +29,8 @@ pub enum ApplyError {
     NoIntent { line: usize },
     /// The INTENT governs an AI block; use the AI tools.
     AiGroup { line: usize },
+    /// The line belongs to a different INTENT than the caller's `intent_hash` names (a stale line).
+    IntentMismatch { line: usize, found: String },
     NoBlocks,
     /// A stamp key that is not agent-owned (`x-…`) or is malformed.
     BadStamp { key: String },
@@ -51,6 +53,11 @@ impl fmt::Display for ApplyError {
             }
             ApplyError::NoIntent { line } => write!(f, "line {line}: no INTENT here"),
             ApplyError::AiGroup { line } => write!(f, "line {line}: this INTENT is satisfied by an AI block; use the AI tools"),
+            ApplyError::IntentMismatch { line, found } => write!(
+                f,
+                "line {line} belongs to the INTENT \"{found}\", whose hash is not the one given; line numbers \
+                 shift whenever the document changes, so list the intents again. Nothing was changed"
+            ),
             ApplyError::NoBlocks => f.write_str("give at least one CODE block"),
             ApplyError::BadStamp { key } => {
                 write!(f, "stamp `{key}`: agents may only add keys starting with `{AGENT_PREFIX}` (lowercase letters, digits, -)")
@@ -72,10 +79,13 @@ impl fmt::Display for ApplyError {
 impl std::error::Error for ApplyError {}
 
 /// Replaces the CODE group of the INTENT at `line` with `bodies` and returns the updated document.
+/// With `expected_intent` (an `intent_hash` from a listing), refuses if the line belongs to another
+/// INTENT.
 pub fn intent_apply(
     doc: &Document,
     fs: &dyn FileSystem,
     line: usize,
+    expected_intent: Option<&str>,
     bodies: &[String],
     agent_stamps: &[(String, String)],
 ) -> Result<String, ApplyError> {
@@ -94,6 +104,8 @@ pub fn intent_apply(
     let text = &doc.text;
     let at = state::block_at(&parsed, text, line).ok_or(ApplyError::NoIntent { line })?;
     let group = parsed.group_of(at).ok_or(ApplyError::NoIntent { line })?;
+    state::check_target(parsed.blocks[group.intent].body_text(text), expected_intent)
+        .map_err(|found| ApplyError::IntentMismatch { line, found })?;
     if group.members.iter().any(|&m| parsed.blocks[m].kind == Kind::Ai) {
         return Err(ApplyError::AiGroup { line });
     }
@@ -180,7 +192,7 @@ mod tests {
 
     fn apply(text: &str, line: usize, bodies: &[&str]) -> Result<String, ApplyError> {
         let bodies: Vec<String> = bodies.iter().map(|b| b.to_string()).collect();
-        intent_apply(&Document::new(text), &fs(), line, &bodies, &[])
+        intent_apply(&Document::new(text), &fs(), line, None, &bodies, &[])
     }
 
     #[test]
@@ -210,18 +222,35 @@ mod tests {
         assert_eq!(apply(DOC, 3, &["emit('-->')"]), Err(ApplyError::CommentEnd { block: 1 }));
         assert!(matches!(apply(DOC, 3, &["emit(read('missing'))"]), Err(ApplyError::Update(_))));
         assert_eq!(apply(DOC, 1, &["x = 1"]), Err(ApplyError::NoIntent { line: 1 }));
-        let bad_stamp = intent_apply(&Document::new(DOC), &fs(), 3, &["x = 1".into()], &[("intent".into(), "x".into())]);
+        let bad_stamp = intent_apply(&Document::new(DOC), &fs(), 3, None, &["x = 1".into()], &[("intent".into(), "x".into())]);
         assert!(matches!(bad_stamp, Err(ApplyError::BadStamp { .. })));
     }
 
     #[test]
     fn refuses_to_discard_hand_edits_and_keeps_agent_stamps() {
         let bodies = vec!["emit('a')".to_owned()];
-        let stamped = intent_apply(&Document::new(DOC), &fs(), 3, &bodies, &[("x-resolved-at".into(), "09fe57".into())]).unwrap();
+        let stamped = intent_apply(&Document::new(DOC), &fs(), 3, None, &bodies, &[("x-resolved-at".into(), "09fe57".into())]).unwrap();
         assert!(stamped.contains("#@ x-resolved-at: 09fe57"));
         let edited = stamped.replace("-->\na\n<!--/CODE-->", "-->\nA by hand\n<!--/CODE-->");
         let err = apply(&edited, 3, &["emit('b')"]).unwrap_err();
         assert!(matches!(err, ApplyError::HandEdited { .. }), "{err}");
+    }
+
+    #[test]
+    fn stale_line_with_intent_hash_is_refused() {
+        // The scenario from real use: two intents; after the first is applied, the second's old line
+        // number points into the first intent's new block.
+        let doc = "<!--INTENT\nFirst.\n-->\n\n<!--INTENT\nSecond.\n-->\n";
+        let second = stamps::intent_digest("Second.");
+        let first_applied = apply(doc, 1, &["emit('one')\nx = 1\ny = 2"]).unwrap();
+        let stale_line = 5; // was the second INTENT's line; now inside the first intent's CODE block
+        let err = intent_apply(&Document::new(first_applied.clone()), &fs(), stale_line, Some(&second), &["emit('two')".into()], &[])
+            .unwrap_err();
+        assert_eq!(err, ApplyError::IntentMismatch { line: 5, found: "First.".into() });
+        // With the right line and the hash, it works.
+        let line = first_applied.lines().position(|l| l == "Second.").unwrap();
+        let ok = intent_apply(&Document::new(first_applied), &fs(), line, Some(&second), &["emit('two')".into()], &[]).unwrap();
+        assert!(ok.contains("one") && ok.contains("two"));
     }
 
     #[test]

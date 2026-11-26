@@ -10,7 +10,9 @@ code deterministically. See [README.md](README.md) for the one-page summary.
 works on documents held in memory over a `FileSystem` abstraction (`MemoryFs`, `DiskFs`): blocks,
 stamps, groups, canonical AST hash, task declarations, the evaluation loop with block-local variables,
 splicing with `generated` guards, host functions, states (§9), inline values (§7.7), AI blocks (§12) and
-`intent_apply`. CLI: `update`, `check`, `intent-check`, `intent-accept`, `mcp`. Not yet: a step limit for
+`intent_apply`. CLI: `update`, `check`, `intent-check`, `intent-accept`, `mcp`, `skill`. The guide for agents
+is `docs/agent-guide.md` (compiled into the binary: MCP `guide` tool, resource `marklark://guide`, and
+`marklark skill`); keep it in step with the host functions. `examples/` has documents to try. Not yet: a step limit for
 long-running CODE (deliberately deferred). The crate name is reserved (placeholder `0.0.0` on
 crates.io; the first real release must be a higher version) and `marklark.dev` is registered (renewal due
 2027-11-26). The repository stays

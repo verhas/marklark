@@ -1,0 +1,6 @@
+[app]
+name = "Greeter"
+version = "2.1.0"
+
+[server]
+port = 8080
