@@ -74,6 +74,9 @@ emit("\n".join(lines))
 ```
 
 - The body is Starlark (§8 for the dialect and the security model).
+- **Output text** [proposed]: emitted text gets the document's line ending, and non-empty output always
+  ends with a line ending so the closing marker keeps its own line. Output that contains a marklark block
+  marker at the start of a line is an error.
 - **Output region**: a CODE block that calls `emit` must have a closing `<!--/CODE-->`; the text between
   the opening comment and the closing marker is its output region, replaced on every update. A CODE block
   that only defines variables has no closing marker and no output region. Agents always write the
@@ -91,7 +94,7 @@ emit("\n".join(lines))
 |---|---|---|---|
 | `intent` | hash of the governing INTENT's text, whitespace runs collapsed to one space and trimmed | `intent_apply`, `intent-accept` | Group id (§6) and intent-drift detection |
 | `params` | `ast1:blake3:<hex>` — hash of the canonical printout of the parsed CODE body (D20); comments, including stamp lines, and formatting do not count | `intent_apply`, `intent-accept` | Detects hand edits of the code since it was last verified against the intent |
-| `generated` | `<length>:<hash>` of the output region | `update` | Detects hand edits of generated output |
+| `generated` | `<length>:<hash>` of the output region, line endings normalised to `\n`; length in Unicode characters (D38) | `update` | Detects hand edits of generated output |
 
 Hash algorithm (D37): BLAKE3, written as `blake3:<hex>`. There is no compatibility to keep with
 mdship's MD5.
@@ -130,6 +133,9 @@ be its `intent` stamp. Keep adding blocks while all hold:
    if it has no output region) from the next opening comment;
 2. the next block's `intent` stamp equals **G**;
 3. it is a CODE block (an INTENT starts a new group; generated-text blocks are never group members).
+
+[proposed] An INTENT may also bind one AI block (§12) — always a group of its own. Blocks without an
+`intent` stamp count as sharing it, so an INTENT followed by several unstamped CODE blocks binds them all.
 
 **G** need not equal the current INTENT hash — only be shared. Equal means verified; a different shared
 value means the INTENT text was edited, and marklark still knows exactly which blocks belong to it.
@@ -219,6 +225,10 @@ merged into the shared state and its tasks are credited. When it aborts, the lay
 it defined before the abort becomes visible. A finished block never runs again in the same update, so a
 later `lenient=True` redefinition does not affect blocks that already read the variable.
 
+[proposed] Values are plain data — none, bool, int, float, string, list, dict — copied on `define` and
+rebuilt on `var`. A defined value is therefore deeply immutable, and each block runs on its own
+Starlark heap. Functions and other non-data values cannot be defined.
+
 This makes variable passing an implicit dependency, so a `depends_on` task is only needed for dependencies no
 variable expresses (typically "the document's headings are final"). A misspelled variable surfaces as a
 dead end; the dead-end report names the variable so the typo is obvious.
@@ -303,8 +313,9 @@ Computed deterministically, per group:
 
 ## 11. Interfaces [proposed]
 
-Reporting commands can emit JSON (D29). Exit codes are stable once released; the values are fixed when
-the CLI is built (D35).
+Reporting commands can emit JSON (D29). Exit codes are stable once released (D35) [values proposed]:
+`0` success; `1` a document has a problem (block errors, a failed CODE block, a dead end, an edited
+output region); `2` marklark could not do its job (a file could not be read or written).
 
 CLI:
 

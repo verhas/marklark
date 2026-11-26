@@ -186,6 +186,12 @@ rejects a top-level `for`, so CODE needs the extended dialect or that flag enabl
 *Reasoning*: these are implementation details that can be refactored later; checking them against code
 is cheaper than designing them on paper.
 
+*Found during development (2026-11-26, `starlark` 0.14.3)*: CODE uses the extended dialect with `load`
+disabled (`src/lang.rs`). `while` is not part of the grammar. Recursion is not rejected, but unbounded
+recursion ends in a "call stack overflow" error, so it terminates. Still open: there is no step limit,
+so a CODE block with huge nested loops can run for a very long time; the evaluator's statement hook is
+crate-private, so a limit needs another mechanism (e.g. a watchdog).
+
 ## D24. Generated text is a dedicated `<!--AI-->` construct
 
 An INTENT satisfied by agent-written prose uses its own construct, `<!--AI--> … <!--/AI-->`, not a CODE
@@ -341,3 +347,11 @@ All stamps hash with BLAKE3, written as `blake3:<hex>`.
 
 *Reasoning*: fast, cryptographic, a maintained Rust crate (`blake3`); there is no compatibility to keep
 with mdship's MD5.
+
+## D38. `generated` stamp counts characters over normalised line endings
+
+The `generated` stamp is `<length>:blake3:<hex>` where line endings are first normalised to `\n`, the
+length counts Unicode characters (not bytes), and the hash is over the UTF-8 of the normalised text.
+
+*Reasoning*: the stamp must survive a CRLF/LF conversion and a re-encoding of the file (mdship also
+counted characters). A byte count or a hash of raw bytes would turn either into a false "hand edit".

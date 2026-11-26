@@ -4,8 +4,12 @@
 
 pub mod blocks;
 pub mod canon;
+pub mod document;
 pub mod eval;
+pub mod fs;
 pub mod host;
+pub mod lang;
+pub mod markdown;
 pub mod splice;
 pub mod stamps;
 pub mod tasks;

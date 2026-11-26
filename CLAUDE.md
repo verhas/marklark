@@ -6,10 +6,12 @@ marklark is a planned Rust CLI + MCP server that maintains Markdown documents. H
 `<!--INTENT-->` blocks (prose); agents write `<!--CODE-->` blocks (hermetic Starlark); marklark runs the
 code deterministically. See [README.md](README.md) for the one-page summary.
 
-**Status (2026-11-26): design settled (no blocking open questions); code skeleton created.** Cargo project
-(lib + bin, `starlark`/`starlark_syntax` pinned exactly, `blake3`), one empty module per core concern in
-`src/`, git repository on `main` with remote `origin` = `github.com/verhas/marklark` (private). Nothing
-committed or pushed yet.
+**Status (2026-11-26): design settled; core library and a first CLI work.** The library works on
+documents held in memory over a `FileSystem` abstraction (`MemoryFs`, `DiskFs`): blocks, stamps, groups,
+canonical AST hash, task declarations, the evaluation loop with block-local variables, splicing with
+`generated` guards, and a first set of host functions (`emit`, `define`, `var`, `read`, `glob`,
+`headings`, `anchor`, `fence`, `tasks`). CLI: `update`, `check`. Not yet: states (§9), `intent-check`,
+`intent-accept`, inline values, AI blocks, MCP server, remaining host functions, step limit.
 
 ## Where things stand
 
