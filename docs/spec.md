@@ -333,10 +333,15 @@ marklark intent-accept FILE --line N [--drop-stamp]
 marklark mcp                      start the MCP server on stdio
 ```
 
-MCP (via `rmcp`): `intent_list`, `intent_context` (intent text, group members, states, failure detail,
-current output, agent-owned stamps — the agent's evidence for finding renames, e.g. in git history),
-`intent_apply` (accepts agent-owned `x-` stamps; atomic group replacement + stamping), plus read-only
-discovery primitives (`list_headings`, `get_section`, `get_lines`) so agents need not read whole files.
+MCP (via `rmcp`, `marklark mcp` on stdio): `intent_list`, `intent_context` (intent text, group members,
+states, failure detail, current output, agent-owned stamps — the agent's evidence for finding renames,
+e.g. in git history), `intent_apply` (accepts agent-owned `x-` stamps; atomic group replacement +
+stamping), plus read-only discovery primitives (`list_headings`, `get_section`, `get_lines`) so agents
+need not read whole files.
+
+[proposed] Also: `intent_check` and `update` (as the CLI commands), and for AI blocks `ai_resolve`
+(store dependencies), `ai_context` (prompt + extracted dependencies) and `ai_update` (store prose).
+`intent_apply` runs the whole update in memory first and writes nothing if it fails.
 
 ## 12. AI blocks [decided]
 

@@ -5,6 +5,8 @@ use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 
+mod mcp;
+
 use marklark::document::Document;
 use marklark::eval::{self, UpdateError};
 use marklark::fs::DiskFs;
@@ -61,6 +63,8 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// Start the MCP server on stdin/stdout.
+    Mcp,
     /// Confirm that the blocks governed by an INTENT still fit it: re-stamp them.
     IntentAccept {
         file: PathBuf,
@@ -102,6 +106,11 @@ fn main() -> ExitCode {
             }
             if json {
                 println!("{}", serde_json::to_string_pretty(&serde_json::Value::Array(reports)).unwrap_or_default());
+            }
+        }
+        Command::Mcp => {
+            if let Err(e) = mcp::serve() {
+                worst = fail(exit::IO, &format!("MCP server: {e}"));
             }
         }
         Command::IntentAccept { file, line, drop_stamp, bak, no_bak } => {

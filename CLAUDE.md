@@ -6,13 +6,12 @@ marklark is a planned Rust CLI + MCP server that maintains Markdown documents. H
 `<!--INTENT-->` blocks (prose); agents write `<!--CODE-->` blocks (hermetic Starlark); marklark runs the
 code deterministically. See [README.md](README.md) for the one-page summary.
 
-**Status (2026-11-26): design settled; core library and a first CLI work.** The library works on
-documents held in memory over a `FileSystem` abstraction (`MemoryFs`, `DiskFs`): blocks, stamps, groups,
-canonical AST hash, task declarations, the evaluation loop with block-local variables, splicing with
-`generated` guards, and a first set of host functions (`emit`, `define`, `var`, `read`, `glob`,
-`headings`, `anchor`, `fence`, `tasks`, `slice`, `reindent`, `re_*`, `json`, `toml`, `here`,
-`document`), states (§9) and inline values (§7.7). CLI: `update [--strict]`, `check [--determinism]`,
-`intent-check [--strict] [--json]`, `intent-accept`. Not yet: AI blocks, MCP server, `xml()`, step limit.
+**Status (2026-11-26): design settled; library, CLI and MCP server work.** The library (`src/lib.rs`)
+works on documents held in memory over a `FileSystem` abstraction (`MemoryFs`, `DiskFs`): blocks,
+stamps, groups, canonical AST hash, task declarations, the evaluation loop with block-local variables,
+splicing with `generated` guards, host functions, states (§9), inline values (§7.7), AI blocks (§12) and
+`intent_apply`. CLI: `update`, `check`, `intent-check`, `intent-accept`, `mcp`. Not yet: `xml()`, a step
+limit for long-running CODE, reserving the crate name / domain.
 
 ## Where things stand
 
