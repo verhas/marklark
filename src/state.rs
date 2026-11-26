@@ -10,6 +10,8 @@ use crate::canon;
 use crate::document::{DocError, Document, Parsed};
 use crate::eval::UpdateError;
 use crate::splice;
+use crate::fs::FileSystem;
+use crate::libs;
 use crate::stamps;
 
 /// The states of spec §9 that are reported (`none` and `verified` are not findings).
@@ -33,6 +35,8 @@ pub enum State {
     NeedsUpdate,
     /// An AI block's text was edited by hand; regeneration is blocked until it is accepted.
     OutputEdited,
+    /// A library a verified block loads (directly or indirectly) changed since the block was checked.
+    LibChanged,
 }
 
 impl State {
@@ -47,6 +51,7 @@ impl State {
             State::Broken => "broken",
             State::NeedsUpdate => "needs_update",
             State::OutputEdited => "output_edited",
+            State::LibChanged => "lib_changed",
         }
     }
 }
@@ -84,7 +89,7 @@ pub fn severity(state: State, command: Command, strict: bool) -> Severity {
         (Command::Update, Unresolved | Detached) => Warning,
         (Command::Update, _) => Ok,
         (Command::IntentCheck, Unresolved | Detached | IntentChanged | OutputEdited) => Error,
-        (Command::IntentCheck, Unverified | ParamsEdited | Orphan | NeedsUpdate) => Warning,
+        (Command::IntentCheck, Unverified | ParamsEdited | Orphan | NeedsUpdate | LibChanged) => Warning,
     }
 }
 
@@ -183,6 +188,40 @@ fn analyze_parsed(text: &str, parsed: &Parsed) -> Vec<Finding> {
     findings
 }
 
+/// `lib_changed`: CODE blocks checked against their INTENT whose libraries (direct and indirect) are not
+/// the ones recorded in their `#@ lib:` stamps — changed, added, removed, or unreadable (D40).
+pub fn analyze_libs(doc: &Document, fs: &dyn FileSystem) -> Result<Vec<Finding>, Vec<DocError>> {
+    let parsed = doc.parse()?;
+    let mut findings = Vec::new();
+    for (i, block) in parsed.blocks.iter().enumerate() {
+        if block.kind != Kind::Code || parsed.stamps[i].get("intent").is_none() || parsed.group_of(i).is_none() {
+            continue;
+        }
+        let stamped: Vec<String> = parsed.stamps[i].get_all("lib").map(str::to_owned).collect();
+        let current = match libs::closure(doc, fs, block.body_text(&doc.text)) {
+            Ok(c) => c.iter().map(|(p, h)| libs::stamp_value(p, h)).collect::<Vec<_>>(),
+            Err(_) => continue, // reported as broken by a run
+        };
+        if stamped != current {
+            let path_of = |v: &String| v.rsplit_once(' ').map_or(v.clone(), |(p, _)| p.to_owned());
+            let mut changed: Vec<String> = current
+                .iter()
+                .filter(|c| !stamped.contains(c))
+                .chain(stamped.iter().filter(|s| !current.contains(s)))
+                .map(path_of)
+                .collect();
+            changed.sort();
+            changed.dedup();
+            findings.push(Finding {
+                state: State::LibChanged,
+                line: block.line,
+                detail: format!("libraries changed since the code was checked: {}", changed.join(", ")),
+            });
+        }
+    }
+    Ok(findings)
+}
+
 /// Adds the `broken` finding for a run that failed in a block.
 pub fn with_run_result(mut findings: Vec<Finding>, run: &Result<(), UpdateError>) -> Vec<Finding> {
     if let Err(e) = run {
@@ -228,6 +267,8 @@ pub enum AcceptError {
     Unparsable { line: usize, message: String },
     /// The group is an AI block: accept it with `ai::accept`, which also rehashes its inputs.
     AiBlock { line: usize },
+    /// A library the block loads cannot be read.
+    Library { line: usize, message: String },
 }
 
 impl fmt::Display for AcceptError {
@@ -241,6 +282,7 @@ impl fmt::Display for AcceptError {
             AcceptError::NoIntent { line } => write!(f, "line {line}: this block is not governed by an INTENT"),
             AcceptError::Unparsable { line, message } => write!(f, "line {line}: the code does not parse: {message}"),
             AcceptError::AiBlock { line } => write!(f, "line {line}: this is an AI block; accept it with ai::accept"),
+            AcceptError::Library { line, message } => write!(f, "line {line}: {message}"),
         }
     }
 }
@@ -275,9 +317,9 @@ pub fn check_target(intent_text: &str, expected: Option<&str>) -> Result<(), Str
 }
 
 /// `intent-accept`: a human confirms that the blocks governed by the INTENT at (or containing) `line`
-/// still fit it. Every CODE member gets fresh `intent` and `params` stamps; other stamps stay. Returns
-/// the new document text.
-pub fn accept(doc: &Document, line: usize) -> Result<String, AcceptError> {
+/// still fit it. Every CODE member gets fresh `intent`, `params` and `lib` stamps; other stamps stay.
+/// Returns the new document text.
+pub fn accept(doc: &Document, fs: &dyn FileSystem, line: usize) -> Result<String, AcceptError> {
     let parsed = doc.parse().map_err(AcceptError::Document)?;
     let text = &doc.text;
     let at = block_at(&parsed, text, line).ok_or(AcceptError::NoBlock { line })?;
@@ -295,18 +337,24 @@ pub fn accept(doc: &Document, line: usize) -> Result<String, AcceptError> {
         let block = &parsed.blocks[m];
         let params = canon::params_digest(block.body_text(text))
             .map_err(|e| AcceptError::Unparsable { line: block.line, message: e.message })?;
-        updates.push((m, vec![("intent", intent.clone()), ("params", params)]));
+        let libs: Vec<String> = libs::closure(doc, fs, block.body_text(text))
+            .map_err(|message| AcceptError::Library { line: block.line, message })?
+            .iter()
+            .map(|(p, h)| libs::stamp_value(p, h))
+            .collect();
+        updates.push((m, params, libs));
     }
     let mut out = text.clone();
     // From the last block to the first, so earlier byte ranges stay valid.
-    for (m, set) in updates.into_iter().rev() {
-        let pairs: Vec<(&str, Option<&str>)> = set.iter().map(|(k, v)| (*k, Some(v.as_str()))).collect();
-        out = splice::set_stamps(&out, &parsed.blocks[m], &parsed.stamps[m], &pairs);
+    for (m, params, libs) in updates.into_iter().rev() {
+        let lib_refs: Vec<&str> = libs.iter().map(String::as_str).collect();
+        let set: [(&str, &[&str]); 3] = [("intent", &[intent.as_str()]), ("params", &[params.as_str()]), ("lib", &lib_refs)];
+        out = splice::set_stamps(&out, &parsed.blocks[m], &parsed.stamps[m], &set);
     }
     Ok(out)
 }
 
-/// `intent-accept --drop-stamp`: removes the `intent` and `params` stamps from the block at (or
+/// `intent-accept --drop-stamp`: removes the `intent`, `params` and `lib` stamps from the block at (or
 /// containing) `line` — e.g. to turn an orphan into a plain CODE block.
 pub fn drop_stamps(doc: &Document, line: usize) -> Result<String, AcceptError> {
     let parsed = doc.parse().map_err(AcceptError::Document)?;
@@ -314,12 +362,14 @@ pub fn drop_stamps(doc: &Document, line: usize) -> Result<String, AcceptError> {
     if parsed.blocks[at].kind == Kind::Intent {
         return Err(AcceptError::NoBlock { line });
     }
-    Ok(splice::set_stamps(&doc.text, &parsed.blocks[at], &parsed.stamps[at], &[("intent", None), ("params", None)]))
+    let none: &[&str] = &[];
+    Ok(splice::set_stamps(&doc.text, &parsed.blocks[at], &parsed.stamps[at], &[("intent", none), ("params", none), ("lib", none)]))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::fs::MemoryFs;
 
     fn states(text: &str) -> Vec<(State, usize)> {
         analyze(&Document::new(text)).unwrap().into_iter().map(|f| (f.state, f.line)).collect()
@@ -329,7 +379,7 @@ mod tests {
 
     fn verified_doc() -> String {
         let unstamped = format!("{INTENT}<!--CODE\nemit('1')\n-->\n<!--/CODE-->\n");
-        accept(&Document::new(unstamped), 1).unwrap()
+        accept(&Document::new(unstamped), &MemoryFs::new(), 1).unwrap()
     }
 
     #[test]
@@ -348,7 +398,7 @@ mod tests {
         assert!(states(&accepted).is_empty(), "{accepted}");
         assert!(accepted.contains("#@ intent: blake3:") && accepted.contains("#@ params: ast1:blake3:"));
         // Accepting twice changes nothing.
-        assert_eq!(accept(&Document::new(accepted.clone()), 4).unwrap(), accepted);
+        assert_eq!(accept(&Document::new(accepted.clone()), &MemoryFs::new(), 4).unwrap(), accepted);
     }
 
     #[test]
@@ -362,7 +412,7 @@ mod tests {
         let reformatted = doc.replace("emit('1')", "emit( \"1\" )  # same");
         assert!(states(&reformatted).is_empty());
         // Group membership survives the INTENT edit: accepting re-stamps the whole group.
-        assert!(states(&accept(&Document::new(intent_edited), 2).unwrap()).is_empty());
+        assert!(states(&accept(&Document::new(intent_edited), &MemoryFs::new(), 2).unwrap()).is_empty());
     }
 
     #[test]
@@ -376,8 +426,8 @@ mod tests {
 
     #[test]
     fn accept_errors() {
-        assert_eq!(accept(&Document::new("text\n"), 1), Err(AcceptError::NoBlock { line: 1 }));
-        assert_eq!(accept(&Document::new("<!--CODE-->\n"), 1), Err(AcceptError::NoIntent { line: 1 }));
+        assert_eq!(accept(&Document::new("text\n"), &MemoryFs::new(), 1), Err(AcceptError::NoBlock { line: 1 }));
+        assert_eq!(accept(&Document::new("<!--CODE-->\n"), &MemoryFs::new(), 1), Err(AcceptError::NoIntent { line: 1 }));
     }
 
     #[test]

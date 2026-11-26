@@ -65,7 +65,8 @@ file themselves — pass \"data/app.toml\", not read(...)):
   define(name, value, lenient=False) publish plain data for other blocks (dotted names nest)
   var(name, default=)                read it; without default, waits until some block defines it
   tasks(depends_on=[...], completes=[...])   first statement only: order blocks by named tasks
-CODE must not contain the sequence --> anywhere (write \"--\" + \">\").";
+  load(\"//lib/x.star\", \"f\")      shared functions from a .star library (// = project root)
+CODE must not contain the sequence --> anywhere (write \"--\" + \">\"). No width formatting (%3d, {:>3}): pad by hand.";
 
 #[derive(Clone)]
 pub struct MarklarkServer {
@@ -180,6 +181,7 @@ fn findings_json(findings: &[Finding], command: state::Command) -> Value {
 fn all_findings(doc: &Document, fs: &DiskFs) -> Result<Vec<Finding>, String> {
     let mut findings = state::analyze(doc).map_err(|e| join(&e))?;
     findings.extend(ai::analyze(doc, fs).map_err(|e| join(&e))?);
+    findings.extend(state::analyze_libs(doc, fs).map_err(|e| join(&e))?);
     let run = eval::update(doc, fs).map(|_| ());
     let mut findings = state::with_run_result(findings, &run);
     findings.sort_by_key(|f| f.line);
@@ -234,6 +236,7 @@ impl MarklarkServer {
         };
         let mut findings = state::analyze(&doc).unwrap_or_default();
         findings.extend(ai::analyze(&doc, &fs).unwrap_or_default());
+        findings.extend(state::analyze_libs(&doc, &fs).unwrap_or_default());
         let intents: Vec<Value> = parsed
             .groups
             .iter()

@@ -62,7 +62,7 @@ pub fn region_text(emitted: &str, eol: &str) -> String {
 pub fn write_output(text: &str, block: &Block, stamps: &Stamps, output: &str) -> String {
     let region = block.output.clone().expect("write_output: block has no output region");
     let digest = stamps::generated_digest(output);
-    let body = new_body(text, block, stamps, &[("generated", Some(&digest))]);
+    let body = new_body(text, block, stamps, &[("generated", &[digest.as_str()])]);
 
     let mut out = String::with_capacity(text.len() + output.len());
     out.push_str(&text[..block.body.start]);
@@ -73,9 +73,10 @@ pub fn write_output(text: &str, block: &Block, stamps: &Stamps, output: &str) ->
     out
 }
 
-/// Sets (`Some`) or removes (`None`) stamp keys of a block, keeping every other stamp in place and
-/// order; a new key is appended. Returns the new document text.
-pub fn set_stamps(text: &str, block: &Block, stamps: &Stamps, updates: &[(&str, Option<&str>)]) -> String {
+/// Sets stamp keys of a block: each key's lines are replaced by one line per given value (none removes
+/// the key), at the place of its first line, or appended when it is new. Every other stamp keeps its
+/// place and order. Returns the new document text.
+pub fn set_stamps(text: &str, block: &Block, stamps: &Stamps, updates: &[(&str, &[&str])]) -> String {
     let body = new_body(text, block, stamps, updates);
     let mut out = String::with_capacity(text.len() + 128);
     out.push_str(&text[..block.body.start]);
@@ -84,16 +85,14 @@ pub fn set_stamps(text: &str, block: &Block, stamps: &Stamps, updates: &[(&str, 
     out
 }
 
-fn new_body(text: &str, block: &Block, stamps: &Stamps, updates: &[(&str, Option<&str>)]) -> String {
+fn new_body(text: &str, block: &Block, stamps: &Stamps, updates: &[(&str, &[&str])]) -> String {
     let mut pairs: Vec<(&str, &str)> = stamps.stamps.iter().map(|s| (s.key.as_str(), s.value.as_str())).collect();
-    for (key, value) in updates {
-        match (pairs.iter().position(|(k, _)| k == key), value) {
-            (Some(i), Some(v)) => pairs[i].1 = v,
-            (Some(i), None) => {
-                pairs.remove(i);
-            }
-            (None, Some(v)) => pairs.push((key, v)),
-            (None, None) => {}
+    for (key, values) in updates {
+        let at = pairs.iter().position(|(k, _)| k == key).unwrap_or(pairs.len());
+        pairs.retain(|(k, _)| k != key);
+        let at = at.min(pairs.len());
+        for (i, v) in values.iter().enumerate() {
+            pairs.insert(at + i, (key, v));
         }
     }
     stamps::rewrite(block.body_text(text), &pairs)

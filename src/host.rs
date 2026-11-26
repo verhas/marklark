@@ -57,6 +57,8 @@ pub struct BlockCtx<'a> {
     pub document: &'a str,
     /// Where the running block is.
     pub here: Here,
+    /// Set while a library's top level runs: `emit`, `define`, `var` and `tasks` are refused (D40).
+    pub library: bool,
 }
 
 /// The running block's position, for `here()`.
@@ -81,7 +83,21 @@ impl<'a> BlockCtx<'a> {
             base_dir,
             document,
             here,
+            library: false,
         }
+    }
+
+    /// The context for a library's top level.
+    pub fn library(shared: &'a Vars, sandbox: &'a Sandbox<'a>, base_dir: ProjectPath, document: &'a str, here: Here) -> Self {
+        BlockCtx { library: true, ..Self::new(shared, sandbox, base_dir, document, here) }
+    }
+
+    /// Refuses `function` at a library's top level.
+    fn block_only(&self, function: &str) -> anyhow::Result<()> {
+        if self.library {
+            bail!("{function}() cannot run at the top level of a library; call it from a function the block calls");
+        }
+        Ok(())
     }
 
     /// Looks up a dotted name (`app.version`): the root in this block's layer first, then the shared
@@ -160,14 +176,17 @@ fn marklark_host(builder: &mut GlobalsBuilder) {
     fn tasks(
         #[starlark(require = named)] depends_on: Option<Value>,
         #[starlark(require = named)] completes: Option<Value>,
+        eval: &mut Evaluator,
     ) -> anyhow::Result<NoneType> {
         let _ = (depends_on, completes);
+        ctx(eval).block_only("tasks")?;
         Ok(NoneType)
     }
 
     /// Appends text to the block's output region.
     fn emit(#[starlark(require = pos)] text: &str, eval: &mut Evaluator) -> anyhow::Result<NoneType> {
         let c = ctx(eval);
+        c.block_only("emit")?;
         c.output.borrow_mut().push_str(text);
         *c.emitted.borrow_mut() = true;
         Ok(NoneType)
@@ -182,6 +201,7 @@ fn marklark_host(builder: &mut GlobalsBuilder) {
         eval: &mut Evaluator<'v, '_, '_>,
     ) -> anyhow::Result<NoneType> {
         let c = ctx(eval);
+        c.block_only("define")?;
         if !lenient && c.lookup(name).is_some() {
             bail!("variable `{name}` is already defined; use define(..., lenient=True) to redefine it");
         }
@@ -203,6 +223,7 @@ fn marklark_host(builder: &mut GlobalsBuilder) {
         #[starlark(require = named)] default: Option<Value<'v>>,
         eval: &mut Evaluator<'v, '_, '_>,
     ) -> anyhow::Result<Value<'v>> {
+        ctx(eval).block_only("var")?;
         let found = ctx(eval).lookup(name);
         match (found, default) {
             (Some(data), _) => Ok(eval.frozen_heap().alloc(data).to_value()),

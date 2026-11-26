@@ -47,7 +47,10 @@ the top level, list and dict comprehensions, strings with `%` and `.format()`, `
 (with `key=`, `reverse=`), `enumerate`, `zip`, `min`, `max`, `any`, `all`, `int`, `float`, `str`, `repr`,
 `type`, `struct(a=1)`, `fail("message")`, and the usual string, list and dict methods.
 
-Not available: `while`, f-strings, `import`/`load`, `print`, `set`, `map`/`filter`, classes, exceptions
+Formatting: `%s`, `%d`, `%r` and `"{}".format()` work, but there are **no widths or alignment** —
+`%3d`, `{:>3}`, `.rjust()` and `.ljust()` fail. Pad by hand: `" " * (3 - len(s)) + s`.
+
+Not available: `while`, f-strings, `import`, `print`, `set`, `map`/`filter`, classes, exceptions
 (`try`), time, randomness, environment variables, network, processes.
 
 ## Host functions
@@ -117,6 +120,16 @@ block ever defines is a *dead end*; the error names the variable.
 
 Inline values in running text, filled after all CODE has run: `<!--$app.version-->1.2.3` (one word) and
 `<!--= app.name-->My App<!--/=-->` (any text). The value must be a string, number or bool.
+
+### Libraries
+
+Shared functions live in `.star` files: `load("//lib/docs.star", "include")` (`//` from the project
+root; otherwise relative to the loading file). When several blocks need the same formatting or
+extraction, put it in a library — one place for the human to review and change. A library's top level
+may only define functions and constants (no `emit`, `define`, `var`, `tasks`); its functions may use
+every host function when a block calls them, with paths relative to the document. Every block that uses
+a library loads it itself. If the library you need does not exist, write it as a file (tell the human),
+then load it.
 
 ## Patterns
 

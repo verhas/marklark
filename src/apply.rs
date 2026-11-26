@@ -17,6 +17,7 @@ use crate::document::{DocError, Document};
 use crate::eval::{self, UpdateError};
 use crate::fs::FileSystem;
 use crate::lang;
+use crate::libs;
 use crate::splice;
 use crate::stamps::{self, AGENT_PREFIX};
 use crate::state;
@@ -125,7 +126,13 @@ pub fn intent_apply(
         let code = body.trim_matches('\n').replace("\r\n", "\n");
         tasks::collect(&code).map_err(|e| ApplyError::BadCode { block, message: e.to_string() })?;
         let params = canon::params_digest(&code).map_err(|e| ApplyError::BadCode { block, message: e.message })?;
+        let libs: Vec<String> = libs::closure(doc, fs, &code)
+            .map_err(|message| ApplyError::BadCode { block, message })?
+            .iter()
+            .map(|(p, h)| libs::stamp_value(p, h))
+            .collect();
         let mut pairs: Vec<(&str, &str)> = vec![("intent", &intent), ("params", &params)];
+        pairs.extend(libs.iter().map(|l| ("lib", l.as_str())));
         pairs.extend(agent_stamps.iter().map(|(k, v)| (k.as_str(), v.as_str())));
         let stamped = stamps::rewrite(&format!("\n{code}\n"), &pairs);
         new_blocks.push_str(&format!("<!--CODE{stamped}-->\n"));
@@ -251,6 +258,31 @@ mod tests {
         let line = first_applied.lines().position(|l| l == "Second.").unwrap();
         let ok = intent_apply(&Document::new(first_applied), &fs(), line, Some(&second), &["emit('two')".into()], &[]).unwrap();
         assert!(ok.contains("one") && ok.contains("two"));
+    }
+
+    #[test]
+    fn library_stamps_and_lib_changed() {
+        let fs = MemoryFs::new().with("lib/fmt.star", "def shout(s):\n    return s.upper()\n").with("lib/other.star", "x = 1\n");
+        let doc = "<!--INTENT\nShout.\n-->\n\n<!--INTENT\nWhisper.\n-->\n";
+        let bodies = vec!["load('//lib/fmt.star', 'shout')\nemit(shout('hi'))".to_owned()];
+        let applied = intent_apply(&Document::new(doc), &fs, 1, None, &bodies, &[]).unwrap();
+        let line = applied.lines().position(|l| l == "Whisper.").unwrap();
+        let applied = intent_apply(&Document::new(applied), &fs, line, None, &["emit('hi')".to_owned()], &[]).unwrap();
+        assert!(applied.contains("#@ lib: //lib/fmt.star blake3:"), "{applied}");
+        assert_eq!(applied.matches("#@ lib:").count(), 1);
+        let states = |text: &str, fs: &MemoryFs| -> Vec<(state::State, usize)> {
+            state::analyze_libs(&Document::new(text), fs).unwrap().into_iter().map(|f| (f.state, f.line)).collect()
+        };
+        assert!(states(&applied, &fs).is_empty());
+        // Changing the library flags exactly the block that loads it.
+        let changed = fs.clone().with("lib/fmt.star", "def shout(s):\n    return s.upper() + '!'\n");
+        assert_eq!(states(&applied, &changed), [(state::State::LibChanged, 4)]);
+        // Accepting re-stamps it.
+        let accepted = state::accept(&Document::new(applied.clone()), &changed, 1).unwrap();
+        assert!(states(&accepted, &changed).is_empty());
+        // Reformatting a library (line endings) is not a change.
+        let crlf = fs.clone().with("lib/fmt.star", "def shout(s):\r\n    return s.upper()\r\n");
+        assert!(states(&applied, &crlf).is_empty());
     }
 
     #[test]

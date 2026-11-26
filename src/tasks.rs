@@ -125,9 +125,11 @@ fn is_tasks(e: &AstExpr) -> bool {
     matches!(&e.node, ExprP::Identifier(id) if id.node.ident == TASKS)
 }
 
+/// The first statement that is not a `load` (loads may precede the declaration).
 fn first_statement(stmt: &AstStmt) -> Option<&AstStmt> {
     match &stmt.node {
-        StmtP::Statements(stmts) => stmts.first().and_then(first_statement),
+        StmtP::Statements(stmts) => stmts.iter().find_map(first_statement),
+        StmtP::Load(_) => None,
         _ => Some(stmt),
     }
 }
@@ -277,6 +279,7 @@ mod tests {
         let body = "\n# leading comment\ntasks(depends_on=[\"headings\"], completes=[\"toc\", \"x\"])\nemit(1)\n#@ intent: a\n";
         assert_eq!(collect(body).unwrap(), Some(decl(&["headings"], &["toc", "x"])));
         assert_eq!(collect("tasks(completes=['a'])").unwrap(), Some(decl(&[], &["a"])));
+        assert_eq!(collect("load('//l.star', 'f')\ntasks(completes=['a'])").unwrap(), Some(decl(&[], &["a"])));
         assert_eq!(collect("tasks()").unwrap(), Some(TaskDecl::default()));
     }
 

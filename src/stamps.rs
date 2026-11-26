@@ -13,10 +13,10 @@ pub const BLAKE3_PREFIX: &str = "blake3:";
 
 /// Keys only marklark writes (spec §5.2a). A human may edit `dep` lines (§12), but no agent may submit
 /// any of these through `intent_apply`.
-pub const RESERVED_KEYS: &[&str] = &["intent", "params", "generated", "dep", "deps"];
+pub const RESERVED_KEYS: &[&str] = &["intent", "params", "generated", "dep", "deps", "lib"];
 
 /// Keys that may occur more than once in one block.
-const REPEATABLE_KEYS: &[&str] = &["dep"];
+const REPEATABLE_KEYS: &[&str] = &["dep", "lib"];
 
 /// Prefix of agent-owned keys (D31).
 pub const AGENT_PREFIX: &str = "x-";

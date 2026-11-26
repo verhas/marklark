@@ -5,10 +5,10 @@
 
 use starlark::syntax::{AstModule, Dialect};
 
-/// The dialect CODE blocks are parsed and run with: the extended dialect without `load` (CODE gets
-/// everything through host functions, never from other files).
+/// The dialect CODE blocks are parsed and run with: the extended dialect. `load` reads `.star`
+/// libraries through marklark's loader only (D40).
 pub fn code_dialect() -> Dialect {
-    Dialect { enable_load: false, ..Dialect::Extended }
+    Dialect::Extended
 }
 
 /// A CODE body that does not parse.
@@ -35,9 +35,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn no_while_and_no_load() {
+    fn no_while_but_load() {
         assert!(parse("t", "while True:\n    pass\n").is_err());
-        assert!(parse("t", "load('x.star', 'y')\n").is_err());
+        assert!(parse("t", "load('x.star', 'y')\n").is_ok());
         assert!(parse("t", "for x in [1]:\n    pass\n").is_ok());
     }
 }

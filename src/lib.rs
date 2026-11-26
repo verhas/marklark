@@ -15,6 +15,7 @@ pub mod guide;
 pub mod host;
 pub mod inline;
 pub mod lang;
+pub mod libs;
 pub mod markdown;
 pub mod splice;
 pub mod stamps;

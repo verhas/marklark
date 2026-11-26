@@ -97,6 +97,7 @@ emit("\n".join(lines))
 | `intent` | hash of the governing INTENT's text, whitespace runs collapsed to one space and trimmed | `intent_apply`, `intent-accept` | Group id (§6) and intent-drift detection |
 | `params` | `ast1:blake3:<hex>` — hash of the canonical printout of the parsed CODE body (D20); comments, including stamp lines, and formatting do not count | `intent_apply`, `intent-accept` | Detects hand edits of the code since it was last verified against the intent |
 | `generated` | `<length>:<hash>` of the output region, line endings normalised to `\n`; length in Unicode characters (D38) | `update` | Detects hand edits of generated output |
+| `lib` (repeatable) | `//path blake3:<hash>` of each library the block loads, directly or indirectly (D40) | `intent_apply`, `intent-accept` | Detects library changes under verified code (`lib_changed`) |
 
 Hash algorithm (D37): BLAKE3, written as `blake3:<hex>`. There is no compatibility to keep with
 mdship's MD5.
@@ -268,6 +269,17 @@ Given the same inputs, an update must produce identical output. `marklark check 
 whole evaluation twice and fails on any difference; this catches a host function that is accidentally
 not hermetic.
 
+### 7.9 Libraries [decided] (D40)
+
+`load("//lib/docs.star", "name", ...)` loads a `.star` library: `//` paths from the project root, other
+paths relative to the loading file (the document, or another library). Libraries are read through the
+sandbox (confinement, `.gitignore`, deny list). A library's top level may only define functions and
+constants: `emit`, `define`, `var` and `tasks` fail there; called from a block, its functions run as
+part of that block and may use them, and host-function paths stay relative to the document. Each
+library is loaded once per update and reused; each block names what it uses with its own `load`, which
+may precede `tasks(...)`. Load cycles are errors. Blocks record the libraries they use as `lib` stamps
+(§5.1).
+
 ## 8. Starlark and the security model [decided principles, details proposed]
 
 - **Language**: Starlark via `starlark-rust`. Deterministic; no I/O, time, environment or network except
@@ -307,6 +319,7 @@ Computed deterministically, per group:
 | `broken` | a member fails at run time (missing file, no match, …) | fails | error | error |
 | `needs_update` [proposed] | an AI block's inputs changed, or it has no dependencies yet (§12) | — | warning | error |
 | `output_edited` [proposed] | an AI block's text was edited by hand (§12) | — | error | error |
+| `lib_changed` | a library a verified block loads changed since it was checked (§7.9) | runs | warning | error |
 | `verified` | everything matches and runs | runs | — | — |
 
 `update` never blocks on intent drift: the document builds as it did before. The hard failures in

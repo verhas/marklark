@@ -5,20 +5,25 @@ define("marklark.version", "0.1.0");
 <!--/CODE-->
 
 <!--CODE
+def nl():
+  emit("\n")
+  emit("\n")
 v = var("marklark")
 emit(v["version"])
 define("marklark.version", "0-2-0", lenient=True)
 v = var("marklark")
-emit("\n")
+nl()
 emit(v["version"])
-#@ generated: 12:blake3:b3708c16b549ba1fb34a2502225f9186498bc822a509beb19405bad90383c510
+#@ generated: 13:blake3:a95890b95d74d2df2ef46be07dbe005d6f791dd8be11725041353de7896e687c
 -->
 0.1.0
+
 0-2-0
 <!--/CODE-->
 
 <!--CODE
 emit(var("marklark.version"))
+nl()
 #@ generated: 6:blake3:397bf0d90be0a4545e0b6e9a611d2cad31302589cda1984fab7c2004d9192e1d
 -->
 0-2-0

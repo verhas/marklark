@@ -7,6 +7,8 @@ is **[proposed]** — names and signatures are a first cut.
 `reindent`, `fence`, `headings`, `anchor`, `here`, `document`, `define`, `var`, `emit`, `tasks`.
 Flags for the regex functions: `i`, `m`, `s`, `x`. `xml` refuses DTDs.
 
+Shared functions come from `.star` libraries with Starlark's `load()` (spec §7.9, D40).
+
 The sizing question from the design discussion was: *can a small library cover everything mdship's
 placeholder family does?* If ~10–20 functions suffice, one programmable construct is clearly better than
 a placeholder zoo; if it took ~40, the placeholders were capturing more than it seemed. The mapping below

@@ -24,6 +24,7 @@ use crate::fs::{FileSystem, RecordedRead, Sandbox};
 use crate::host::{self, Abort, BlockCtx, Here, Vars};
 use crate::inline::{self, InlineError};
 use crate::lang;
+use crate::libs::Libraries;
 use crate::splice::{self, IntegrityError};
 use crate::tasks::{self, DeclError, GraphError, TaskDecl};
 
@@ -175,6 +176,9 @@ pub fn update(doc: &Document, fs: &dyn FileSystem) -> Result<UpdateResult, Updat
     let base_dir = doc.base_dir();
     let eol = splice::line_ending(&doc.text);
     let doc_name = doc.path.as_ref().map_or_else(|| "document".to_owned(), |p| p.to_string());
+    // Libraries are loaded once per update and reused by every block that loads them (D40).
+    let libraries = Libraries::new(&sandbox, &globals, base_dir.clone(), &doc.text);
+    let loader = libraries.loader_for(base_dir.clone());
 
     let mut text = doc.text.clone();
     let mut current: Parsed = parsed;
@@ -202,7 +206,7 @@ pub fn update(doc: &Document, fs: &dyn FileSystem) -> Result<UpdateResult, Updat
             let body = block.body_text(&text).to_owned();
             let here = Here { line: block.line, next_line: line_after(&text, block.end()) };
             let ctx = BlockCtx::new(&vars, &sandbox, base_dir.clone(), &text, here);
-            let outcome = run_block(&doc_name, &block.line, &body, &globals, &ctx);
+            let outcome = run_block(&doc_name, &block.line, &body, &globals, &ctx, &loader);
             let reads = sandbox.take_reads();
 
             if let Some(Abort::MissingVar(name)) = host::take_abort(&ctx) {
@@ -307,12 +311,14 @@ fn run_block(
     body: &str,
     globals: &starlark::environment::Globals,
     ctx: &BlockCtx,
+    loader: &dyn starlark::eval::FileLoader,
 ) -> Result<(), UpdateError> {
     let padded = format!("{}{body}", "\n".repeat(line - 1));
     let ast = lang::parse(doc_name, &padded).map_err(|e| UpdateError::Runtime { line: *line, message: e.message })?;
     Module::with_temp_heap(|module| {
         let mut eval = Evaluator::new(&module);
         eval.extra = Some(ctx);
+        eval.set_loader(loader);
         eval.eval_module(ast, globals).map(|_| ())
     })
     .map_err(|e| UpdateError::Runtime { line: *line, message: with_hint(e.to_string()) })
@@ -551,6 +557,57 @@ emit(str(h.line) + " " + h.next_line)"#, &fs), "1 NEXT LINE\n");
             }
             other => panic!("{other:?}"),
         }
+    }
+
+    const INCLUDE_LIB: &str = "load('fmt.star', 'number')\n\ndef include(file, start, stop, margin=0):\n    return number(reindent(slice(file, start=start, end=stop), margin))\n";
+    const FMT_LIB: &str = "def pad(n, width):\n    s = str(n)\n    return ' ' * (width - len(s)) + s\n\ndef number(text):\n    lines = text.rstrip('\\n').split('\\n')\n    return '\\n'.join([pad(i + 1, 2) + '  ' + l for i, l in enumerate(lines)])\n";
+
+    fn lib_fs() -> MemoryFs {
+        MemoryFs::new()
+            .with("lib/docs.star", INCLUDE_LIB)
+            .with("lib/fmt.star", FMT_LIB)
+            .with("src/a.py", "x\n# S\n    one()\n    two()\n# E\n")
+    }
+
+    #[test]
+    fn libraries_load_from_the_root_and_relative_to_the_loading_file() {
+        let fs = lib_fs();
+        // `//lib/docs.star` from the root; docs.star loads `fmt.star` relative to itself; the host
+        // function paths inside it (`src/a.py`) stay relative to the document.
+        let doc = Document::at(crate::fs::ProjectPath::new("guide.md").unwrap(),
+            "<!--CODE\nload('//lib/docs.star', 'include')\nemit(include('src/a.py', '# S', '# E'))\n-->\n<!--/CODE-->\n");
+        let r = update(&doc, &fs).unwrap();
+        assert_eq!(region(&r.text, 0), " 1  one()\n 2  two()\n");
+    }
+
+    #[test]
+    fn a_library_is_loaded_once_and_each_block_loads_it_itself() {
+        let fs = lib_fs();
+        let both = "<!--CODE\nload('//lib/fmt.star', 'number')\nemit(number('a'))\n-->\n<!--/CODE-->\n<!--CODE\nload('//lib/fmt.star', 'number')\nemit(number('b'))\n-->\n<!--/CODE-->\n";
+        let r = run(both, &fs).unwrap();
+        // Only the first block reads the file; the second reuses the loaded library.
+        assert_eq!(r.blocks[0].reads.iter().filter(|x| x.path.as_str() == "lib/fmt.star").count(), 1);
+        assert_eq!(r.blocks[1].reads.iter().filter(|x| x.path.as_str() == "lib/fmt.star").count(), 0);
+        // A block that does not load it cannot use it.
+        let missing = "<!--CODE\nload('//lib/fmt.star', 'number')\n-->\n<!--CODE\nemit(number('b'))\n-->\n<!--/CODE-->\n";
+        assert!(matches!(run(missing, &fs), Err(UpdateError::Runtime { .. })));
+    }
+
+    #[test]
+    fn library_restrictions() {
+        let fs = lib_fs()
+            .with("lib/noisy.star", "emit('at load time')\n")
+            .with("lib/a.star", "load('b.star', 'x')\n")
+            .with("lib/b.star", "load('a.star', 'y')\n")
+            .with("data.json", "{}");
+        let message = |body: &str| match run(&format!("<!--CODE\n{body}\n-->\n<!--/CODE-->\n"), &fs) {
+            Err(UpdateError::Runtime { message, .. }) => message,
+            other => panic!("{body}: {other:?}"),
+        };
+        assert!(message("load('//lib/noisy.star', 'x')").contains("cannot run at the top level of a library"));
+        assert!(message("load('//data.json', 'x')").contains("libraries are .star files"));
+        assert!(message("load('//lib/a.star', 'x')").contains("load cycle: //lib/a.star -> //lib/b.star -> //lib/a.star"));
+        assert!(message("load('//lib/missing.star', 'x')").contains("missing.star"));
     }
 
     #[test]

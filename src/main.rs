@@ -178,7 +178,8 @@ fn update_file(file: &Path, strict: bool, backup: Backup) -> u8 {
         Err(e) => return fail(exit::IO, &e),
     };
     // Intent drift never blocks an update (spec §9); some states warn, and --strict makes them errors.
-    let findings = state::analyze(&doc).unwrap_or_default();
+    let mut findings = state::analyze(&doc).unwrap_or_default();
+    findings.extend(state::analyze_libs(&doc, &fs).unwrap_or_default());
     if print_findings(file, &findings, state::Command::Update, strict) == Severity::Error {
         return exit::DOCUMENT;
     }
@@ -279,6 +280,7 @@ fn intent_check_file(file: &Path, strict: bool, print: bool) -> (u8, serde_json:
     };
     let findings = match state::analyze(&doc).and_then(|mut f| {
         f.extend(ai::analyze(&doc, &fs)?);
+        f.extend(state::analyze_libs(&doc, &fs)?);
         f.sort_by_key(|x| x.line);
         Ok(f)
     }) {
@@ -322,7 +324,7 @@ fn intent_accept_file(file: &Path, line: usize, drop_stamp: bool, backup: Backup
     let result = if drop_stamp {
         state::drop_stamps(&doc, line).map_err(|e| e.to_string())
     } else {
-        match state::accept(&doc, line) {
+        match state::accept(&doc, &fs, line) {
             Err(AcceptError::AiBlock { line }) => ai::accept(&doc, &fs, line).map_err(|e| e.to_string()),
             other => other.map_err(|e| e.to_string()),
         }

@@ -195,7 +195,7 @@ rejects a top-level `for`, so CODE needs the extended dialect or that flag enabl
 is cheaper than designing them on paper.
 
 *Found during development (2026-11-26, `starlark` 0.14.3)*: CODE uses the extended dialect with `load`
-disabled (`src/lang.rs`). `while` is not part of the grammar. Recursion is not rejected, but unbounded
+disabled (since D40: enabled, through marklark's loader only) (`src/lang.rs`). `while` is not part of the grammar. Recursion is not rejected, but unbounded
 recursion ends in a "call stack overflow" error, so it terminates. Still open: there is no step limit,
 so a CODE block with huge nested loops can run for a very long time; the evaluator's statement hook is
 crate-private, so a limit needs another mechanism (e.g. a watchdog).
@@ -376,3 +376,23 @@ prose is the human's call, so the human removes the CODE first.
 type a structural marker — mechanics the computer should do. Worse, with no tool to create the block, an
 agent told to use only MCP edited the file directly. The decision is now expressed in prose, where the
 human already expresses everything else, and the whole AI flow runs through MCP.
+
+## D40. Libraries: `load()` of `.star` files
+
+CODE may `load("//lib/docs.star", "include")`. A library is a `.star` file in the project, read through
+the sandbox; `//` paths are relative to the project root, other `load` paths to the loading file (paths
+given to host functions stay relative to the document). A library's top level may only define functions
+and constants — `emit`, `define`, `var`, `tasks` fail there; inside library functions, called by a
+block, they work. A library is loaded once per update and reused, but a block still names what it uses
+with its own `load`. Load cycles are errors. There is no other way to share functions between blocks.
+
+Every CODE block checked against its INTENT records the libraries it uses, directly and through other
+libraries, as `#@ lib: //path blake3:<hash>` stamps (content hash, line endings normalised), written by
+`intent_apply` and `intent-accept`. A library that no longer matches its stamp is reported as
+`lib_changed` on exactly the blocks that use it (warning in `intent-check`, error with `--strict`).
+
+*Reasoning*: humans review and own the code, and a formatting rule repeated in many blocks is changed in
+many places — the place an agent short of context is most likely to miss one. `load` is Starlark's own
+mechanism. The `lib` stamps keep the promise of `params`: a block shown as verified runs exactly the
+code someone checked; folding library hashes into `params` would make one library edit look like a hand
+edit of every block, and not tracking them would let a library change silently alter verified blocks.
