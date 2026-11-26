@@ -106,6 +106,12 @@ Regex flags: `i` ignore case, `m` multi-line, `s` dot matches newline, `x` verbo
 | `var(name, default=…)` | reads it; without a default, the block waits until another block defines it (blocks run in passes, in document order) |
 | `tasks(depends_on=["…"], completes=["…"])` | first statement only, literal lists: this block runs after every block that completes the tasks it depends on |
 
+Values from `var()` are frozen: `v["k"] = …` or `xs.append(…)` on them is an error. Build a new value —
+`d = dict(var("x").items())`, `xs = list(var("xs"))`, `var("xs") + [item]` — and publish it with
+`define(name, value, lenient=True)`. Values are dicts and lists, indexed as in Python: `v["version"]`,
+not `v.version`. `var()` returns the value at the moment of the call: after redefining a name, call
+`var()` again to see the new value — a value read earlier keeps the old content.
+
 A block's definitions become visible to others only when it finishes. A block that waits for something no
 block ever defines is a *dead end*; the error names the variable.
 
