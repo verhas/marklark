@@ -84,8 +84,40 @@ impl<'a> BlockCtx<'a> {
         }
     }
 
+    /// Looks up a dotted name (`app.version`): the root in this block's layer first, then the shared
+    /// state, then down through nested dicts.
     fn lookup(&self, name: &str) -> Option<serde_json::Value> {
-        self.local.borrow().get(name).cloned().or_else(|| self.shared.get(name).cloned())
+        let mut parts = name.split('.');
+        let root = parts.next()?;
+        let mut value = self.local.borrow().get(root).cloned().or_else(|| self.shared.get(root).cloned())?;
+        for key in parts {
+            value = value.as_object()?.get(key)?.clone();
+        }
+        Some(value)
+    }
+
+    /// Stores a value under a dotted name in this block's layer, creating or extending nested dicts.
+    fn store(&self, name: &str, data: serde_json::Value) -> anyhow::Result<()> {
+        let mut parts: Vec<&str> = name.split('.').collect();
+        let root = parts.remove(0);
+        if parts.is_empty() {
+            self.local.borrow_mut().insert(root.to_owned(), data);
+            return Ok(());
+        }
+        let mut top = self.lookup(root).unwrap_or_else(|| serde_json::Value::Object(Default::default()));
+        let mut node = &mut top;
+        for (i, key) in parts.iter().enumerate() {
+            let obj = node
+                .as_object_mut()
+                .ok_or_else(|| anyhow!("define(\"{name}\"): `{}` is not a dict", parts[..i].iter().fold(root.to_owned(), |a, p| a + "." + p)))?;
+            if i == parts.len() - 1 {
+                obj.insert((*key).to_owned(), data);
+                break;
+            }
+            node = obj.entry((*key).to_owned()).or_insert_with(|| serde_json::Value::Object(Default::default()));
+        }
+        self.local.borrow_mut().insert(root.to_owned(), top);
+        Ok(())
     }
 
     fn resolve(&self, path: &str) -> anyhow::Result<ProjectPath> {
@@ -131,7 +163,8 @@ fn marklark_host(builder: &mut GlobalsBuilder) {
         Ok(NoneType)
     }
 
-    /// Publishes a value under `name`. Redefining a name is an error unless `lenient=True` (D21).
+    /// Publishes a value under `name`. A dotted name (`app.version`) creates or extends nested dicts.
+    /// Redefining a name is an error unless `lenient=True` (D21).
     fn define<'v>(
         #[starlark(require = pos)] name: &str,
         #[starlark(require = pos)] value: Value<'v>,
@@ -145,7 +178,10 @@ fn marklark_host(builder: &mut GlobalsBuilder) {
         let data = value
             .to_json_value()
             .map_err(|e| anyhow!("define(\"{name}\", ...): the value must be plain data (none, bool, int, float, string, list, dict): {e}"))?;
-        c.local.borrow_mut().insert(name.to_owned(), data);
+        if name.split('.').any(|p| p.is_empty()) {
+            bail!("define(\"{name}\"): not a valid name");
+        }
+        c.store(name, data)?;
         Ok(NoneType)
     }
 
@@ -191,7 +227,8 @@ fn marklark_host(builder: &mut GlobalsBuilder) {
         Ok(eval.heap().alloc(AllocList(found)))
     }
 
-    /// The document's headings as structs `{level, text, line, anchor}`, filtered by level.
+    /// The document's headings as structs `{level, text, line, anchor, path}`, filtered by level;
+    /// `path` lists the parent headings' texts, outermost first.
     fn headings<'v>(
         #[starlark(require = named, default = 1)] min_level: i32,
         #[starlark(require = named, default = 6)] max_level: i32,
@@ -201,12 +238,13 @@ fn marklark_host(builder: &mut GlobalsBuilder) {
         let list: Vec<Value<'v>> = markdown::headings(ctx(eval).document)
             .into_iter()
             .filter(|h| (min_level..=max_level).contains(&(h.level as i32)))
-            .map(|Heading { level, text, line, anchor }| {
+            .map(|Heading { level, text, line, anchor, path }| {
                 heap.alloc(AllocStruct([
                     ("level", heap.alloc(level as i32)),
                     ("text", heap.alloc(text)),
                     ("line", heap.alloc(line as i32)),
                     ("anchor", heap.alloc(anchor)),
+                    ("path", heap.alloc(AllocList(path))),
                 ]))
             })
             .collect();
@@ -338,6 +376,29 @@ fn marklark_host(builder: &mut GlobalsBuilder) {
         let c = ctx(eval);
         let text = c.sandbox.read_text(&c.resolve(path)?)?;
         let data = data::parse_yaml(&text).map_err(|e| anyhow!("yaml(\"{path}\"): {e}"))?;
+        Ok(eval.heap().alloc(data))
+    }
+
+    /// An XML file parsed into plain data with mdship IMPORT's conventions (root-wrapped, `@attr`,
+    /// `_text`, repeated elements as lists). Namespaces are stripped unless mapped in `xmlns`
+    /// (`{"name": "url"}`), whose elements become `name_local`.
+    fn xml<'v>(
+        #[starlark(require = pos)] path: &str,
+        #[starlark(require = named)] xmlns: Option<starlark::values::dict::DictRef<'v>>,
+        eval: &mut Evaluator<'v, '_, '_>,
+    ) -> anyhow::Result<Value<'v>> {
+        let mut map = std::collections::BTreeMap::new();
+        if let Some(d) = xmlns {
+            for (k, v) in d.iter() {
+                let (Some(k), Some(v)) = (k.unpack_str(), v.unpack_str()) else {
+                    bail!("xml(\"{path}\"): xmlns must map names to namespace URL strings");
+                };
+                map.insert(k.to_owned(), v.to_owned());
+            }
+        }
+        let c = ctx(eval);
+        let text = c.sandbox.read_text(&c.resolve(path)?)?;
+        let data = data::parse_xml(&text, &map).map_err(|e| anyhow!("xml(\"{path}\"): {e}"))?;
         Ok(eval.heap().alloc(data))
     }
 

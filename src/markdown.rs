@@ -15,6 +15,8 @@ pub struct Heading {
     pub line: usize,
     /// GitHub-style anchor, unique within the document (`-1`, `-2`, … for repeats).
     pub anchor: String,
+    /// The texts of the parent headings, outermost first (empty for a top-level heading).
+    pub path: Vec<String>,
 }
 
 /// All headings, in document order.
@@ -22,6 +24,7 @@ pub fn headings(doc: &str) -> Vec<Heading> {
     let mut out = Vec::new();
     let mut seen: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
     let mut current: Option<(u8, usize, String)> = None;
+    let mut stack: Vec<(u8, String)> = Vec::new();
     for (event, range) in Parser::new_ext(doc, Options::empty()).into_offset_iter() {
         match event {
             Event::Start(Tag::Heading { level, .. }) => {
@@ -44,7 +47,14 @@ pub fn headings(doc: &str) -> Vec<Heading> {
                     let n = seen.entry(base.clone()).or_insert(0);
                     let anchor = if *n == 0 { base.clone() } else { format!("{base}-{n}") };
                     *n += 1;
-                    out.push(Heading { level, text: text.trim().to_owned(), line, anchor });
+                    // Parents: the nearest earlier heading of each lower level.
+                    while stack.last().is_some_and(|(l, _): &(u8, String)| *l >= level) {
+                        stack.pop();
+                    }
+                    let path = stack.iter().map(|(_, t)| t.clone()).collect();
+                    let text = text.trim().to_owned();
+                    stack.push((level, text.clone()));
+                    out.push(Heading { level, text, line, anchor, path });
                 }
             }
             _ => {}
@@ -106,11 +116,18 @@ mod tests {
         assert_eq!(
             h,
             vec![
-                Heading { level: 1, text: "Title".into(), line: 1, anchor: "title".into() },
-                Heading { level: 2, text: "Getting started!".into(), line: 5, anchor: "getting-started".into() },
-                Heading { level: 2, text: "Getting started".into(), line: 11, anchor: "getting-started-1".into() },
+                Heading { level: 1, text: "Title".into(), line: 1, anchor: "title".into(), path: vec![] },
+                Heading { level: 2, text: "Getting started!".into(), line: 5, anchor: "getting-started".into(), path: vec!["Title".into()] },
+                Heading { level: 2, text: "Getting started".into(), line: 11, anchor: "getting-started-1".into(), path: vec!["Title".into()] },
             ]
         );
+    }
+
+    #[test]
+    fn heading_paths() {
+        let paths: Vec<Vec<String>> = headings("# A\n## B\n#### D\n### C\n## E\n# F\n").into_iter().map(|h| h.path).collect();
+        let s = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<_>>();
+        assert_eq!(paths, [s(&[]), s(&["A"]), s(&["A", "B"]), s(&["A", "B"]), s(&["A"]), s(&[])]);
     }
 
     #[test]

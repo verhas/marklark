@@ -10,8 +10,9 @@ code deterministically. See [README.md](README.md) for the one-page summary.
 works on documents held in memory over a `FileSystem` abstraction (`MemoryFs`, `DiskFs`): blocks,
 stamps, groups, canonical AST hash, task declarations, the evaluation loop with block-local variables,
 splicing with `generated` guards, host functions, states (§9), inline values (§7.7), AI blocks (§12) and
-`intent_apply`. CLI: `update`, `check`, `intent-check`, `intent-accept`, `mcp`. Not yet: `xml()`, a step
-limit for long-running CODE, reserving the crate name / domain.
+`intent_apply`. CLI: `update`, `check`, `intent-check`, `intent-accept`, `mcp`. Not yet: a step limit for
+long-running CODE (deliberately deferred), reserving the crate name / domain. The repository stays
+private for now; a crates.io placeholder must therefore not contain the real source.
 
 ## Where things stand
 

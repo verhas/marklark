@@ -3,9 +3,9 @@
 All I/O in CODE goes through these functions; the host records every read with its hash. Everything here
 is **[proposed]** — names and signatures are a first cut.
 
-**Implemented** (2026-11-26): `read`, `slice`, `glob`, `json`, `yaml`, `toml`, `front_matter`, `re_search`, `re_findall`, `re_sub`,
+**Implemented** (2026-11-26): `read`, `slice`, `glob`, `json`, `yaml`, `toml`, `xml`, `front_matter`, `re_search`, `re_findall`, `re_sub`,
 `reindent`, `fence`, `headings`, `anchor`, `here`, `document`, `define`, `var`, `emit`, `tasks`.
-Flags for the regex functions: `i`, `m`, `s`, `x`. Not yet: `xml`.
+Flags for the regex functions: `i`, `m`, `s`, `x`. `xml` refuses DTDs.
 
 The sizing question from the design discussion was: *can a small library cover everything mdship's
 placeholder family does?* If ~10–20 functions suffice, one programmable construct is clearly better than
@@ -41,7 +41,7 @@ Starlark has no regular expressions, so they must come from the host.
 | Function | Returns |
 |---|---|
 | `document()` | str — the current document text (§7.6 of the spec) |
-| `headings(min_level=1, max_level=6)` | list of `{level, text, line, anchor, path}` |
+| `headings(min_level=1, max_level=6)` | list of `{level, text, line, anchor, path}` — `path`: the parent headings' texts, outermost first |
 | `anchor(text)` | str — the GitHub-style slug, same algorithm as `headings()` |
 | `front_matter()` | value or None — the document's YAML front matter |
 | `here()` | `{line, next_line}` — this block's position (`next_line`: the first line after the block, or None); covers mdship SUP |

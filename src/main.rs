@@ -52,6 +52,9 @@ enum Command {
         /// Run the whole evaluation twice and fail on any difference.
         #[arg(long)]
         determinism: bool,
+        /// Print a JSON report on stdout.
+        #[arg(long)]
+        json: bool,
     },
     /// Report the intent states of each document; exit 1 if any is an error.
     IntentCheck {
@@ -92,9 +95,20 @@ fn main() -> ExitCode {
                 worst = worst.max(update_file(file, strict, backup_mode(bak, no_bak)));
             }
         }
-        Command::Check { files, determinism } => {
+        Command::Check { files, determinism, json } => {
+            let mut reports = Vec::new();
             for file in &files {
-                worst = worst.max(check_file(file, determinism));
+                let (code, errors) = check_file(file, determinism);
+                if !json {
+                    for e in &errors {
+                        eprintln!("{}: {e}", file.display());
+                    }
+                }
+                reports.push(serde_json::json!({ "file": file.display().to_string(), "ok": errors.is_empty(), "errors": errors }));
+                worst = worst.max(code);
+            }
+            if json {
+                println!("{}", serde_json::to_string_pretty(&serde_json::Value::Array(reports)).unwrap_or_default());
             }
         }
         Command::IntentCheck { files, strict, json } => {
@@ -186,13 +200,14 @@ fn write_document(file: &Path, old: &str, new: &str, backup: Backup) -> u8 {
     exit::OK
 }
 
-fn check_file(file: &Path, determinism: bool) -> u8 {
+/// Checks one document; returns the exit code and the error messages.
+fn check_file(file: &Path, determinism: bool) -> (u8, Vec<String>) {
     let (fs, doc) = match load(file) {
         Ok(x) => x,
-        Err(e) => return fail(exit::IO, &e),
+        Err(e) => return (exit::IO, vec![e]),
     };
     if let Err(e) = eval::check(&doc) {
-        return report(file, &e);
+        return (exit::DOCUMENT, error_lines(&e));
     }
     if determinism {
         let first = eval::update(&doc, &fs);
@@ -203,14 +218,23 @@ fn check_file(file: &Path, determinism: bool) -> u8 {
             _ => false,
         };
         if !same {
-            eprintln!("{}: two runs of the same update gave different results", file.display());
-            return exit::DOCUMENT;
+            return (exit::DOCUMENT, vec!["two runs of the same update gave different results".into()]);
         }
         if let Err(e) = first {
-            return report(file, &e);
+            return (exit::DOCUMENT, error_lines(&e));
         }
     }
-    exit::OK
+    (exit::OK, Vec::new())
+}
+
+/// The messages of an error, one per problem.
+fn error_lines(e: &UpdateError) -> Vec<String> {
+    match e {
+        UpdateError::Document(errors) => errors.iter().map(ToString::to_string).collect(),
+        UpdateError::TaskGraph(errors) => errors.iter().map(ToString::to_string).collect(),
+        UpdateError::Inline(errors) => errors.iter().map(ToString::to_string).collect(),
+        other => vec![other.to_string()],
+    }
 }
 
 /// Prints findings with their severity for `command`; returns the worst severity.

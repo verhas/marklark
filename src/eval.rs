@@ -380,6 +380,21 @@ mod tests {
     }
 
     #[test]
+    fn dotted_names_nest() {
+        let text = "<!--CODE\ndefine('app.name', 'Demo')\ndefine('app.db.port', 5432)\n-->\n<!--CODE\nemit(var('app.name') + ':' + str(var('app.db.port')) + ':' + str(sorted(var('app').keys())))\n-->\n<!--/CODE-->\n";
+        let r = run(text, &MemoryFs::new()).unwrap();
+        assert_eq!(region(&r.text, 0), "Demo:5432:[\"db\", \"name\"]\n");
+        assert_eq!(r.vars["app"], serde_json::json!({"name": "Demo", "db": {"port": 5432}}));
+        let redefine = "<!--CODE\ndefine('app.name', 'a')\ndefine('app.name', 'b')\n-->\n";
+        assert!(matches!(run(redefine, &MemoryFs::new()), Err(UpdateError::Runtime { .. })));
+        let not_dict = "<!--CODE\ndefine('v', 1)\ndefine('v.x', 2)\n-->\n";
+        assert!(matches!(run(not_dict, &MemoryFs::new()), Err(UpdateError::Runtime { .. })));
+        // A missing nested name aborts like a missing variable.
+        let wait = "<!--CODE\nemit(var('app.version'))\n-->\n<!--/CODE-->\n<!--CODE\ndefine('app.name', 'x')\n-->\n";
+        assert!(matches!(run(wait, &MemoryFs::new()), Err(UpdateError::DeadEnd(_))));
+    }
+
+    #[test]
     fn var_default_does_not_abort() {
         let text = "<!--CODE\nemit(str(var('nope', default=[])))\n-->\n<!--/CODE-->\n";
         assert_eq!(region(&run(text, &MemoryFs::new()).unwrap().text, 0), "[]\n");
@@ -480,6 +495,9 @@ emit(c["name"] + ":" + str(c["ports"][1]))"#;
         assert_eq!(emit_of(r#"emit(toml("Cargo.toml")["package"]["version"])"#, &fs), "0.3.1\n");
         let fs = fs.with("conf.yaml", "server:\n  host: example.org\n  ports: [80, 443]\n");
         assert_eq!(emit_of(r#"emit(yaml("conf.yaml")["server"]["host"])"#, &fs), "example.org\n");
+        let fs = fs.with("pom.xml", "<project xmlns='http://maven.apache.org/POM/4.0.0' xmlns:x='urn:x'><version>1.0</version><x:version>2</x:version></project>");
+        assert_eq!(emit_of(r#"p = xml("pom.xml", xmlns={"x": "urn:x"})["project"]
+emit(p["version"] + "/" + p["x_version"])"#, &fs), "1.0/2\n");
         let m = r#"m = re_search(r"v(?P<maj>\d+)\.(\d+)", "ver v12.4 x")
 emit("%s %s %s %d %d" % (m.text, m.groups[1], m.named["maj"], m.start, m.end))"#;
         assert_eq!(emit_of(m, &fs), "v12.4 4 12 4 9\n");

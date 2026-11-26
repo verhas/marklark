@@ -1,6 +1,7 @@
 # marklark
 
-**Status: design phase. No code yet.**
+**Status: working pre-release.** The library, the CLI and the MCP server implement the specification;
+no version has been released yet.
 
 marklark keeps Markdown documents up to date from their environment — source files, data files, other
 parts of the same document — using instructions hidden in HTML comments, so the rendered document is
@@ -29,6 +30,67 @@ emit(fence(slice("tests/test_markdown.py",
 <!--/CODE-->
 ```
 
+The `#@` stamps record that the code was checked against the intent (`intent`, `params`) and what it
+generated (`generated`). When a human edits the intent, the code, or the generated text, marklark notices
+and says so — it never silently overwrites a human edit.
+
+A region can also be **generative**: an empty `<!--AI--> <!--/AI-->` block after an INTENT is filled
+with prose by an agent, from dependencies marklark extracts and hashes, and is flagged for regeneration
+when those inputs change.
+
+## Install
+
+From a clone of this repository:
+
+```sh
+cargo install --path .
+```
+
+## Use
+
+```sh
+marklark update FILE...                 # run all CODE blocks, splice their output into the files
+marklark check FILE...                  # structure, stamps, declarations, task graph, guards; runs nothing
+marklark check --determinism FILE...    # run every update twice and compare
+marklark intent-check FILE...           # report intent states (unresolved, intent_changed, params_edited, …)
+marklark intent-accept FILE --line N    # a human confirms the code (or AI text) still fits its INTENT
+marklark mcp                            # MCP server on stdin/stdout, for agents
+```
+
+`--strict` turns every intent state other than verified into an error; `--json` prints machine-readable
+reports. Exit codes: `0` success, `1` a document has a problem, `2` a file could not be read or written.
+A `.bak` copy is written before a file changes, unless git already holds the file's content.
+
+To give an agent the MCP tools in Claude Code:
+
+```sh
+claude mcp add marklark -- marklark mcp
+```
+
+The tools: `intent_list`, `intent_context`, `intent_apply`, `intent_check`, `update`, `ai_resolve`,
+`ai_context`, `ai_update`, `list_headings`, `get_section`, `get_lines`.
+
+## What CODE can do
+
+CODE is Starlark with no ambient I/O. Everything goes through host functions: reading files (`read`,
+`slice`, `glob`, `json`, `yaml`, `toml`, `xml`), text (`re_search`, `re_findall`, `re_sub`, `reindent`,
+`fence`), the document (`headings`, `anchor`, `front_matter`, `here`, `document`), variables shared
+between blocks (`define`, `var`), and output (`emit`). Blocks can order themselves with
+`tasks(depends_on=[...], completes=[...])`. Files are read only inside the project root; gitignored files
+and secrets such as `.env` are refused. See [docs/host-functions.md](docs/host-functions.md).
+
+Values can also appear inline in running text: `<!--$version-->1.2.3` or
+`<!--= app.name-->My App<!--/=-->`.
+
+## As a library
+
+The `marklark` crate works on documents held in memory: `Document` is text plus an optional path, and
+file access goes through the `FileSystem` trait (`MemoryFs` for in-memory files, `DiskFs` for a
+directory tree). `eval::update`, `state::analyze`, `apply::intent_apply` and the `ai` module are what the
+CLI and the MCP server use.
+
+## Relationship to mdship
+
 marklark is the successor in spirit to [mdship](https://github.com/verhas/mdship), which has one
 dedicated placeholder type per task (INCLUDE, IMPORT, SIP, SLURP, …) and is written in Python. marklark
 replaces that family with one programmable construct, is written in Rust, and ships as a single binary.
@@ -38,9 +100,9 @@ mdship remains maintained for environments where only `pip` installs are allowed
 
 | File | Contents |
 |---|---|
-| [docs/spec.md](docs/spec.md) | The specification draft: constructs, stamps, states, evaluation model, security |
+| [docs/spec.md](docs/spec.md) | The specification: constructs, stamps, states, evaluation model, security |
 | [docs/host-functions.md](docs/host-functions.md) | The host-function library, sized against every mdship feature |
 | [docs/decisions.md](docs/decisions.md) | Decision log with the reasoning behind each decision |
-| [docs/open-questions.md](docs/open-questions.md) | What is still undecided, with current leanings |
+| [docs/open-questions.md](docs/open-questions.md) | What is still undecided |
 | [docs/mdship-lessons.md](docs/mdship-lessons.md) | What to carry over from mdship (lessons, not code) |
 | [CLAUDE.md](CLAUDE.md) | Orientation for agent sessions working on this repository |

@@ -35,9 +35,11 @@ A block is an HTML comment that:
 
 Anything else, including ordinary HTML comments, is left alone byte for byte.
 
-**`-->` inside a block** [proposed]: a comment ends at the first `-->`, so CODE must not contain the
-sequence `-->` anywhere (including inside string literals; write `"--" + ">"`). `marklark check` reports
-a block whose Starlark fails to parse because of an early `-->` with a dedicated message. Output emitted
+**`-->` inside a block** [decided]: a comment ends at the first `-->`, so CODE must not contain the
+sequence `-->` anywhere (including inside string literals; write `"--" + ">"`). Detection is by shape and
+therefore limited: marklark reports a block whose comment ends at a `-->` followed by more text on the
+same line (CODE and AI blocks), or that leaves a stray `-->` line behind it, with a dedicated message —
+the rest of the block would otherwise show in the rendered document. Output emitted
 by CODE must not contain the block's own closing marker; `emit` refuses it.
 
 ## 3. INTENT [decided]

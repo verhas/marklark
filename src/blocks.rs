@@ -80,6 +80,10 @@ pub enum BlockError {
     MissingClose { kind: Kind, line: usize },
     /// A closing marker that does not close the block directly before it.
     StrayClose { kind: Kind, line: usize },
+    /// A block comment that apparently ends early, at a `-->` inside its body (spec §2): `end_line` is
+    /// where it ended. Detected by shape — more code after the `-->` on the same line, or a stray
+    /// `-->` line later — so the rest of the body would show in the rendered document.
+    EarlyEnd { kind: Kind, line: usize, end_line: usize },
 }
 
 impl fmt::Display for BlockError {
@@ -95,6 +99,11 @@ impl fmt::Display for BlockError {
                 f,
                 "line {line}: <!--/{kind}--> does not follow a <!--{kind} block it could close"
             ),
+            BlockError::EarlyEnd { kind, line, end_line } => write!(
+                f,
+                "line {line}: the <!--{kind} comment ends early at the `-->` on line {end_line}, so the rest of \
+                 the block would show in the rendered document; inside the block write \"--\" + \">\" instead"
+            ),
         }
     }
 }
@@ -104,9 +113,50 @@ impl std::error::Error for BlockError {}
 /// Locates every block in `doc`. Returns all structural errors found, not just the first.
 pub fn locate(doc: &str) -> Result<Vec<Block>, Vec<BlockError>> {
     let lines = LineIndex::new(doc);
-    let (tokens, mut errors) = scan(doc, &lines);
+    let (tokens, comments, mut errors) = scan(doc, &lines);
+    early_ends(doc, &lines, &tokens, &comments, &mut errors);
     let blocks = pair(doc, tokens, &mut errors);
     if errors.is_empty() { Ok(blocks) } else { Err(errors) }
+}
+
+/// Detects block comments that ended at a `-->` inside their body (spec §2): (a) a CODE or AI
+/// comment whose `-->` has more text after it on the same line; (b) a line that is just `-->` outside
+/// every comment and code block — the leftover end of a comment that closed too early — attributed to
+/// the nearest block before it.
+fn early_ends(doc: &str, lines: &LineIndex, tokens: &[Token], comments: &[Range<usize>], errors: &mut Vec<BlockError>) {
+    let code = code_ranges(doc);
+    let opens: Vec<(Kind, usize, Range<usize>)> = tokens
+        .iter()
+        .filter_map(|t| match t {
+            Token::Open { kind, line, open, .. } => Some((*kind, *line, open.clone())),
+            Token::Close { .. } => None,
+        })
+        .collect();
+    let mut reported: Vec<usize> = Vec::new();
+    for (kind, line, open) in &opens {
+        if *kind != Kind::Intent && !rest_of_line_is_blank(doc, open.end) {
+            errors.push(BlockError::EarlyEnd { kind: *kind, line: *line, end_line: lines.line_of(open.end - 1) });
+            reported.push(*line);
+        }
+    }
+    let mut start = 0;
+    for l in doc.split_inclusive('\n') {
+        let here = start;
+        start += l.len();
+        if l.trim() != "-->" {
+            continue;
+        }
+        let inside = |r: &Range<usize>| r.start <= here && here < r.end;
+        if code.iter().any(inside) || comments.iter().any(inside) || opens.iter().any(|(_, _, o)| inside(o)) {
+            continue;
+        }
+        if let Some((kind, line, open)) = opens.iter().rev().find(|(_, _, o)| o.end <= here)
+            && !reported.contains(line)
+        {
+            errors.push(BlockError::EarlyEnd { kind: *kind, line: *line, end_line: lines.line_of(open.end - 1) });
+            reported.push(*line);
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -115,10 +165,12 @@ enum Token {
     Close { kind: Kind, line: usize, range: Range<usize> },
 }
 
-/// Finds every opening comment and closing marker, in document order.
-fn scan(doc: &str, lines: &LineIndex) -> (Vec<Token>, Vec<BlockError>) {
+/// Finds every opening comment and closing marker, in document order, and the ranges of ordinary
+/// HTML comments.
+fn scan(doc: &str, lines: &LineIndex) -> (Vec<Token>, Vec<Range<usize>>, Vec<BlockError>) {
     let code = code_ranges(doc);
     let mut tokens = Vec::new();
+    let mut comments = Vec::new();
     let mut errors = Vec::new();
     let mut pos = 0;
     while let Some(found) = doc[pos..].find("<!--") {
@@ -159,11 +211,14 @@ fn scan(doc: &str, lines: &LineIndex) -> (Vec<Token>, Vec<BlockError>) {
         }
         // An ordinary HTML comment: skip it whole, so its content is never mistaken for a block.
         pos = match doc[after..].find("-->") {
-            Some(rel) => after + rel + 3,
+            Some(rel) => {
+                comments.push(start..after + rel + 3);
+                after + rel + 3
+            }
             None => after,
         };
     }
-    (tokens, errors)
+    (tokens, comments, errors)
 }
 
 /// Pairs opening comments with the closing marker that directly follows them.
@@ -361,6 +416,21 @@ mod tests {
             locate("<!--CODE\n-->\n<!--/AI-->\n").unwrap_err(),
             vec![BlockError::StrayClose { kind: Kind::Ai, line: 3 }]
         );
+    }
+
+    #[test]
+    fn early_comment_end_is_detected() {
+        // `-->` inside a string on one line: more code follows the comment end.
+        let one_line = "# T\n<!--CODE\nemit(\"a-->b\")\n-->\n<!--/CODE-->\n";
+        assert_eq!(locate(one_line).unwrap_err()[0], BlockError::EarlyEnd { kind: Kind::Code, line: 2, end_line: 3 });
+        // `-->` alone inside a multi-line string: the real `-->` is left stray.
+        let multi = "<!--CODE\nx = \"\"\"\n-->\n\"\"\"\n-->\n";
+        assert_eq!(locate(multi).unwrap_err(), vec![BlockError::EarlyEnd { kind: Kind::Code, line: 1, end_line: 3 }]);
+        // INTENT prose with an arrow.
+        let intent = "<!--INTENT\nmap a --> b\n-->\n";
+        assert_eq!(locate(intent).unwrap_err(), vec![BlockError::EarlyEnd { kind: Kind::Intent, line: 1, end_line: 2 }]);
+        // Legitimate `-->` lines: in an ordinary comment and in a code fence.
+        assert!(locate("<!--\nnote\n-->\n```\n-->\n```\n<!--CODE\nx = 1\n-->\n").is_ok());
     }
 
     #[test]
