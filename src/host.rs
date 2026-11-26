@@ -252,7 +252,7 @@ fn marklark_host(builder: &mut GlobalsBuilder) {
             if matcher.is_match(path.as_str()) {
                 found.push(match path.strip_dir(&c.base_dir) {
                     Some(rel) => rel.to_owned(),
-                    None => format!("/{path}"),
+                    None => format!("//{path}"),
                 });
             }
         }

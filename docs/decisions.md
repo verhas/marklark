@@ -309,11 +309,14 @@ marklark decisions that apply: no YAML (D16), `#@` stamps (D19), BLAKE3, and sta
 *Reasoning*: the mdship design works and is proven in use; generated prose is not where marklark's new
 ideas are.
 
-## D34. Secrets outside git: `.gitignore` files plus a built-in deny list
+## D34. Secrets: `.gitignore` files plus a built-in deny list
 
-Without git (D32), marklark still honours `.gitignore` files found under the project root (parsed by
-marklark itself, e.g. with the `ignore` crate), and always refuses a small built-in default deny list
-(`.env`, `*.pem`, `id_*`, …).
+marklark honours `.gitignore` files found under the project root (parsed by marklark itself, with the
+`ignore` crate, so it works the same with or without git) and always refuses a built-in deny list
+(`.env`, `.env.*`, `*.pem`, `*.key`, `id_rsa*`, `id_dsa*`, `id_ecdsa*`, `id_ed25519*`) — with or without git.
+
+*Correction (2026-11-26)*: the first version said this applied when there is no git; the deny list and
+the `.gitignore` rules apply in every case.
 
 *Reasoning*: keeps D18's protection against an injected intent copying secrets into a document, whether
 or not the directory is a git repository.

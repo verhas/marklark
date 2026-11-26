@@ -50,7 +50,8 @@ Not available: `while`, f-strings, `import`, `print`, `set`, `map`/`filter`, cla
 
 ## Host functions
 
-Paths are relative to the document's directory and must stay inside the project. Gitignored files and
+Paths are relative to the document's directory (`//path` from the project root) and must stay inside
+the project. Gitignored files and
 secrets (`.env`, `*.pem`, keys) are refused. **File functions take a path and read the file themselves:
 `toml("data/app.toml")`, not `toml(read(...))`.** Every function fails loudly — a pattern that matches
 nothing is an error, never an empty result.

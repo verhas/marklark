@@ -25,7 +25,7 @@ An intent can be satisfied in two ways:
   from, regenerated only when those inputs change. This is mdship's AI placeholder. It is a dedicated
   `<!--AI--> … <!--/AI-->` construct that follows mdship's AI placeholder by concept (D24, D33; §12).
 
-## 2. Recognising blocks [decided, details proposed]
+## 2. Recognising blocks [decided]
 
 A block is an HTML comment that:
 
@@ -76,7 +76,7 @@ emit("\n".join(lines))
 ```
 
 - The body is Starlark (§8 for the dialect and the security model).
-- **Output text** [proposed]: emitted text gets the document's line ending, and non-empty output always
+- **Output text** [decided]: emitted text gets the document's line ending, and non-empty output always
   ends with a line ending so the closing marker keeps its own line. Output that contains a marklark block
   marker at the start of a line is an error.
 - **Output region**: a CODE block that calls `emit` must have a closing `<!--/CODE-->`; the text between
@@ -137,7 +137,7 @@ be its `intent` stamp. Keep adding blocks while all hold:
 2. the next block's `intent` stamp equals **G**;
 3. it is a CODE block (an INTENT starts a new group; generated-text blocks are never group members).
 
-[proposed] An INTENT may also bind one AI block (§12) — always a group of its own. Blocks without an
+[decided] An INTENT may also bind one AI block (§12) — always a group of its own. Blocks without an
 `intent` stamp count as sharing it, so an INTENT followed by several unstamped CODE blocks binds them all.
 
 **G** need not equal the current INTENT hash — only be shared. Equal means verified; a different shared
@@ -228,7 +228,7 @@ merged into the shared state and its tasks are credited. When it aborts, the lay
 it defined before the abort becomes visible. A finished block never runs again in the same update, so a
 later `lenient=True` redefinition does not affect blocks that already read the variable.
 
-[proposed] Values are plain data — none, bool, int, float, string, list, dict — copied on `define` and
+[decided] Values are plain data — none, bool, int, float, string, list, dict — copied on `define` and
 rebuilt, frozen, on `var`: changing a value read with `var` is an error (not a silent change to a private
 copy); a block builds a new value instead (`dict(v.items())`, `list(v)`) and publishes it with
 `define(..., lenient=True)`. `var` returns the value at the moment of the call — a snapshot, not a live
@@ -247,7 +247,7 @@ Host functions that read the document (`headings()`, `document()`, `here()`, …
 stands at that moment, including output already spliced in during this update. Ordering such reads
 after the blocks that generate headings is exactly what tasks are for.
 
-### 7.7 Inline values [decided forms, details proposed]
+### 7.7 Inline values [decided]
 
 Values can be shown inside running text (D25):
 
@@ -257,7 +257,7 @@ Values can be shown inside running text (D25):
 - `<!--= expr-->value<!--/=-->` — the long form; the value may contain anything except the closing
   marker.
 
-[proposed] Both forms take a variable path: a name followed by `.key` and `[index]` steps
+[decided] Both forms take a variable path: a name followed by `.key` and `[index]` steps
 (`app.version`, `ports[0]`). The value must be a string, number or bool (bools render as `true` /
 `false`). Inline values are filled after all CODE has run. References inside code blocks, code spans,
 marklark block comments and output regions are left alone. An undefined variable, a non-scalar value, or
@@ -292,9 +292,9 @@ may precede `tasks(...)`. Load cycles are errors. Blocks record the libraries th
   nearest directory at or above the document containing `marklark.toml`; otherwise the document's
   directory (D22); paths are resolved and
   symlinks that escape the root are refused. **Gitignored files are refused by default**, so an injected
-  intent cannot copy `.env` into a document that is later published. Outside git, marklark still honours
-  `.gitignore` files under the project root and always refuses a built-in deny list (`.env`, `*.pem`,
-  `id_*`, …) (D34).
+  intent cannot copy `.env` into a document that is later published. With or without git, marklark
+  honours `.gitignore` files under the project root and always refuses a built-in deny list (`.env`,
+  `*.pem`, `id_*`, …) (D34).
 - **Writes**: CODE can only produce text for its own output region (plus `define`d values). It never
   modifies the rest of the document (D28). Invoking external tools and writing other files (e.g.
   rendered diagrams) is phase 2 (D27).
@@ -317,8 +317,8 @@ Computed deterministically, per group:
 | `params_edited` | a member's `params` stamp ≠ its code | runs | warning | error |
 | `orphan` | a CODE block with an `intent` stamp that belongs to no group | runs | warning | error |
 | `broken` | a member fails at run time (missing file, no match, …) | fails | error | error |
-| `needs_update` [proposed] | an AI block's inputs changed, or it has no dependencies yet (§12) | — | warning | error |
-| `output_edited` [proposed] | an AI block's text was edited by hand (§12) | — | error | error |
+| `needs_update` | an AI block's inputs changed, or it has no dependencies yet (§12) | — | warning | error |
+| `output_edited` | an AI block's text was edited by hand (§12) | — | error | error |
 | `lib_changed` | a library a verified block loads changed since it was checked (§7.9) | runs | warning | error |
 | `verified` | everything matches and runs | runs | — | — |
 
@@ -336,9 +336,9 @@ Computed deterministically, per group:
   unstaged or staged changes); without git it is always written. `--bak` / `--no-bak` override.
 - **Git is optional** (D32): marklark works without it; no stamp, state or CODE semantics depend on it.
 
-## 11. Interfaces [proposed]
+## 11. Interfaces [decided]
 
-Reporting commands can emit JSON (D29). Exit codes are stable once released (D35) [values proposed]:
+Reporting commands can emit JSON (D29). Exit codes are stable once released (D35):
 `0` success; `1` a document has a problem (block errors, a failed CODE block, a dead end, an edited
 output region); `2` marklark could not do its job (a file could not be read or written).
 
@@ -359,11 +359,11 @@ e.g. in git history), `intent_apply` (accepts agent-owned `x-` stamps; atomic gr
 stamping), plus read-only discovery primitives (`list_headings`, `get_section`, `get_lines`) so agents
 need not read whole files.
 
-[proposed] Also: `intent_check` and `update` (as the CLI commands), and for AI blocks `ai_resolve`
+Also: `intent_check` and `update` (as the CLI commands), and for AI blocks `ai_resolve`
 (store dependencies), `ai_context` (prompt + extracted dependencies) and `ai_update` (store prose).
 `intent_apply` runs the whole update in memory first and writes nothing if it fails.
 
-[proposed] Every MCP tool that writes (`intent_apply`, `ai_resolve`, `ai_update`) takes, besides the
+Every MCP tool that writes (`intent_apply`, `ai_resolve`, `ai_update`) takes, besides the
 `line`, the `intent` it is aimed at — the `intent_hash` that `intent_list`, `intent_context` and
 `ai_context` return. Line numbers shift with every write; a line that now belongs to another INTENT is
 refused and nothing changes. Success messages name the INTENT that was changed. The guide for agents
@@ -414,7 +414,7 @@ Follow the style in docs/brief.md.
 - **Creation** [decided] (D39): the agent creates the AI block, through `ai_resolve` on an INTENT that
   has no block yet, but only when the human asked for prose — in the INTENT or in the request. It never
   chooses prose on its own, and `ai_resolve` refuses on an INTENT that already has CODE.
-- **`dep` restriction** [proposed]: because a `dep` line is human-editable text that marklark evaluates,
+- **`dep` restriction** [decided]: because a `dep` line is human-editable text that marklark evaluates,
   it must be a single `read(...)` or `slice(...)` call with literal arguments, on one line. It runs in
   the same sandbox as CODE, with paths relative to the document.
 - **States** (§9): `unverified` and `intent_changed` as for CODE; edited `dep` lines are reported as
