@@ -11,8 +11,9 @@ works on documents held in memory over a `FileSystem` abstraction (`MemoryFs`, `
 stamps, groups, canonical AST hash, task declarations, the evaluation loop with block-local variables,
 splicing with `generated` guards, host functions, states (§9), inline values (§7.7), AI blocks (§12) and
 `intent_apply`. CLI: `update`, `check`, `intent-check`, `intent-accept`, `mcp`. Not yet: a step limit for
-long-running CODE (deliberately deferred), registering `marklark.dev`. The crate name is reserved
-(placeholder `0.0.0` on crates.io); the first real release must be a higher version. The repository stays
+long-running CODE (deliberately deferred). The crate name is reserved (placeholder `0.0.0` on
+crates.io; the first real release must be a higher version) and `marklark.dev` is registered (renewal due
+2027-11-26). The repository stays
 private for now; a crates.io placeholder must therefore not contain the real source.
 
 ## Where things stand
@@ -32,11 +33,13 @@ placeholders) and ended with the decision to build a new product. Everything dec
 
 ## Next steps
 
-1. No open question is blocking any more. `starlark-rust` dialect details (flags, termination,
-   resource limits, string formatting) are settled during development (D23).
-2. Register `marklark.dev` (the crates.io name is reserved).
-3. Build the core: locate blocks → collect declarations → evaluation loop → splice.
-4. CLI (`update`, `check`, `intent-check`, `intent-accept`), then the MCP server (`rmcp`).
+1. The owner reviews the `[proposed]` items in `docs/spec.md` (output text, group binding of unstamped
+   blocks, plain-data variables, inline paths, AI states and `dep` restriction, exit codes, extra MCP
+   tools) and the deny list applying inside git too.
+2. Use marklark on real documents (mdship's documentation is the natural test bed) and fix what that
+   shows.
+3. Later: a step limit for long-running CODE (deferred by the owner); a first real release (`0.1.0` or
+   higher — publishing makes the source public on crates.io).
 
 ## Conventions for this repository
 

@@ -24,8 +24,8 @@ repository named `marklark`; the GitHub user `MarkLark` exists (a personal accou
 2023-05-13, unrelated old Python repos) — judged not a conflict. `marklark.com` is registered;
 `marklark.dev` / `.io` / `.org` showed no name servers (probably free, unconfirmed).
 Crate name reserved 2026-11-26: placeholder `marklark 0.0.0` published on crates.io (manifest and a
-one-line doc comment only, no source and no repository link while the repository is private). To do:
-register `marklark.dev`.
+one-line doc comment only, no source and no repository link while the repository is private). Domain
+`marklark.dev` registered 2026-11-26 (name.com, one year; renewal due 2027-11-26).
 
 ## D4. Two levels: INTENT (human) and CODE (agent)
 
