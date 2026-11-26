@@ -6,6 +6,7 @@ pub mod ai;
 pub mod apply;
 pub mod blocks;
 pub mod canon;
+pub mod data;
 pub mod document;
 pub mod eval;
 pub mod extract;

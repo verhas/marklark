@@ -478,6 +478,8 @@ mod tests {
 emit(c["name"] + ":" + str(c["ports"][1]))"#;
         assert_eq!(emit_of(c, &fs), "app:443\n");
         assert_eq!(emit_of(r#"emit(toml("Cargo.toml")["package"]["version"])"#, &fs), "0.3.1\n");
+        let fs = fs.with("conf.yaml", "server:\n  host: example.org\n  ports: [80, 443]\n");
+        assert_eq!(emit_of(r#"emit(yaml("conf.yaml")["server"]["host"])"#, &fs), "example.org\n");
         let m = r#"m = re_search(r"v(?P<maj>\d+)\.(\d+)", "ver v12.4 x")
 emit("%s %s %s %d %d" % (m.text, m.groups[1], m.named["maj"], m.start, m.end))"#;
         assert_eq!(emit_of(m, &fs), "v12.4 4 12 4 9\n");
@@ -498,6 +500,14 @@ emit(str(h.line) + " " + h.next_line)"#, &fs), "1 NEXT LINE\n");
             Err(UpdateError::Runtime { message, .. }) => assert!(message.contains("start pattern"), "{message}"),
             other => panic!("{other:?}"),
         }
+    }
+
+    #[test]
+    fn front_matter_is_available_to_code() {
+        let text = "---\ntitle: Guide\nversion: 3\n---\n<!--CODE\nfm = front_matter()\nemit(fm['title'] + ' v' + str(fm['version']))\n-->\n<!--/CODE-->\n";
+        assert!(run(text, &MemoryFs::new()).unwrap().text.contains("-->\nGuide v3\n<!--/CODE-->"));
+        let none = "<!--CODE\nemit(str(front_matter()))\n-->\n<!--/CODE-->\n";
+        assert_eq!(region(&run(none, &MemoryFs::new()).unwrap().text, 0), "None\n");
     }
 
     #[test]

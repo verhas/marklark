@@ -25,6 +25,7 @@ use starlark::values::none::NoneType;
 use starlark::values::structs::AllocStruct;
 use starlark::values::Value;
 
+use crate::data;
 use crate::extract::{self, Slice};
 use crate::fs::{ProjectPath, Sandbox};
 use crate::markdown::{self, Heading};
@@ -329,7 +330,22 @@ fn marklark_host(builder: &mut GlobalsBuilder) {
         let c = ctx(eval);
         let text = c.sandbox.read_text(&c.resolve(path)?)?;
         let data: toml::Value = toml::from_str(&text).map_err(|e| anyhow!("toml(\"{path}\"): {e}"))?;
-        Ok(eval.heap().alloc(toml_to_json(data)))
+        Ok(eval.heap().alloc(data::toml_to_json(data)))
+    }
+
+    /// A YAML file parsed into plain data (the first document of the file; an empty file is None).
+    fn yaml<'v>(#[starlark(require = pos)] path: &str, eval: &mut Evaluator<'v, '_, '_>) -> anyhow::Result<Value<'v>> {
+        let c = ctx(eval);
+        let text = c.sandbox.read_text(&c.resolve(path)?)?;
+        let data = data::parse_yaml(&text).map_err(|e| anyhow!("yaml(\"{path}\"): {e}"))?;
+        Ok(eval.heap().alloc(data))
+    }
+
+    /// The document's YAML front matter parsed into plain data, or None if it has none.
+    fn front_matter<'v>(eval: &mut Evaluator<'v, '_, '_>) -> anyhow::Result<Value<'v>> {
+        let Some(text) = data::front_matter_text(ctx(eval).document) else { return Ok(Value::new_none()) };
+        let data = data::parse_yaml(text).map_err(|e| anyhow!("front_matter(): {e}"))?;
+        Ok(eval.heap().alloc(data))
     }
 
     /// The running block's position: `line` (of its opening comment) and `next_line` (the first line
@@ -346,18 +362,6 @@ fn marklark_host(builder: &mut GlobalsBuilder) {
     /// The whole document as it stands now (spec §7.6).
     fn document(eval: &mut Evaluator) -> anyhow::Result<String> {
         Ok(ctx(eval).document.to_owned())
-    }
-}
-
-fn toml_to_json(v: toml::Value) -> serde_json::Value {
-    match v {
-        toml::Value::String(s) => s.into(),
-        toml::Value::Integer(i) => i.into(),
-        toml::Value::Float(f) => serde_json::Number::from_f64(f).map_or(serde_json::Value::Null, Into::into),
-        toml::Value::Boolean(b) => b.into(),
-        toml::Value::Datetime(d) => d.to_string().into(),
-        toml::Value::Array(a) => a.into_iter().map(toml_to_json).collect(),
-        toml::Value::Table(t) => t.into_iter().map(|(k, v)| (k, toml_to_json(v))).collect::<serde_json::Map<_, _>>().into(),
     }
 }
 

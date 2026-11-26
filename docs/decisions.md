@@ -113,6 +113,10 @@ catches typos (a needed task nobody completes) and task cycles before anything r
 INTENT is prose, CODE is Starlark, stamps are simple key/value lines. *Reasoning*: less ballast, one
 fewer dependency (and the Rust YAML ecosystem is unsettled).
 
+*Scope (clarified 2026-11-26)*: D16 is about marklark's own constructs. It does not forbid reading YAML
+where a document or project needs it: host functions such as `yaml(path)` and `front_matter()` parse
+YAML data (via `yaml-rust2`).
+
 ## D17. Byte-preserving edits; guarded output; git-aware backups
 
 Carried over from mdship as lessons (see [mdship-lessons.md](mdship-lessons.md)).

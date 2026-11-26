@@ -3,7 +3,7 @@
 All I/O in CODE goes through these functions; the host records every read with its hash. Everything here
 is **[proposed]** — names and signatures are a first cut.
 
-**Implemented** (2026-11-26): `read`, `slice`, `glob`, `json`, `toml`, `re_search`, `re_findall`, `re_sub`,
+**Implemented** (2026-11-26): `read`, `slice`, `glob`, `json`, `yaml`, `toml`, `front_matter`, `re_search`, `re_findall`, `re_sub`,
 `reindent`, `fence`, `headings`, `anchor`, `here`, `document`, `define`, `var`, `emit`, `tasks`.
 Flags for the regex functions: `i`, `m`, `s`, `x`. Not yet: `xml`.
 
@@ -21,7 +21,7 @@ lands at **about 20 functions**, most of them small.
 | `read(path)` | str | Whole text file |
 | `slice(path, start=None, end=None, range=None, section=None, include_start=False, include_end=False, repeat=False)` | str | mdship INCLUDE/AI-dep slicing. A `start`/`end` that never matches is an error, never "include nothing". `repeat=True` concatenates every start/end segment |
 | `glob(pattern)` | list[str] | Sorted, inside the project root, gitignored files excluded |
-| `json(path)` / `toml(path)` | value | Parsed into plain data (TOML dates become strings). No `yaml()`: no YAML (D16) |
+| `json(path)` / `yaml(path)` / `toml(path)` | value | Parsed into plain data (TOML dates become strings; YAML: the first document) |
 | `xml(path, xmlns=None)` | value | Wrapped in the root element name; namespaces stripped unless mapped in `xmlns` (mdship IMPORT semantics) |
 
 ### Text helpers
@@ -43,7 +43,7 @@ Starlark has no regular expressions, so they must come from the host.
 | `document()` | str — the current document text (§7.6 of the spec) |
 | `headings(min_level=1, max_level=6)` | list of `{level, text, line, anchor, path}` |
 | `anchor(text)` | str — the GitHub-style slug, same algorithm as `headings()` |
-| ~~`front_matter()`~~ | dropped: front matter is YAML (D16) |
+| `front_matter()` | value or None — the document's YAML front matter |
 | `here()` | `{line, next_line}` — this block's position (`next_line`: the first line after the block, or None); covers mdship SUP |
 
 ### Variables and output
