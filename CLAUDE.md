@@ -11,7 +11,8 @@ works on documents held in memory over a `FileSystem` abstraction (`MemoryFs`, `
 stamps, groups, canonical AST hash, task declarations, the evaluation loop with block-local variables,
 splicing with `generated` guards, host functions, states (§9), inline values (§7.7), AI blocks (§12) and
 `intent_apply`. CLI: `update`, `check`, `intent-check`, `intent-accept`, `mcp`. Not yet: a step limit for
-long-running CODE (deliberately deferred), reserving the crate name / domain. The repository stays
+long-running CODE (deliberately deferred), registering `marklark.dev`. The crate name is reserved
+(placeholder `0.0.0` on crates.io); the first real release must be a higher version. The repository stays
 private for now; a crates.io placeholder must therefore not contain the real source.
 
 ## Where things stand
@@ -33,7 +34,7 @@ placeholders) and ended with the decision to build a new product. Everything dec
 
 1. No open question is blocking any more. `starlark-rust` dialect details (flags, termination,
    resource limits, string formatting) are settled during development (D23).
-2. Reserve the name: publish a `0.0.0` placeholder crate on crates.io, register `marklark.dev`.
+2. Register `marklark.dev` (the crates.io name is reserved).
 3. Build the core: locate blocks → collect declarations → evaluation loop → splice.
 4. CLI (`update`, `check`, `intent-check`, `intent-accept`), then the MCP server (`rmcp`).
 

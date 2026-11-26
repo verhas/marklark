@@ -23,7 +23,9 @@ interpreter ships inside the binary with no runtime.
 repository named `marklark`; the GitHub user `MarkLark` exists (a personal account, last updated
 2023-05-13, unrelated old Python repos) — judged not a conflict. `marklark.com` is registered;
 `marklark.dev` / `.io` / `.org` showed no name servers (probably free, unconfirmed).
-To do: publish a `0.0.0` crate placeholder, register `marklark.dev`.
+Crate name reserved 2026-11-26: placeholder `marklark 0.0.0` published on crates.io (manifest and a
+one-line doc comment only, no source and no repository link while the repository is private). To do:
+register `marklark.dev`.
 
 ## D4. Two levels: INTENT (human) and CODE (agent)
 
