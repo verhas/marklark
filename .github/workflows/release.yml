@@ -144,19 +144,27 @@ jobs:
           merge-multiple: true
       - run: node npm/build.mjs "${{ needs.check.outputs.version }}" archives npm/out
       # Platform packages first: the main package depends on them.
+      # Trusted publishing (OIDC): no token. npm only lets a token with 2FA bypass stage a package's
+      # first version, so each new package is published once by hand (RELEASING.md). A version that
+      # is already on npm is skipped, so a re-run is safe.
       - name: Publish (dry run unless this is a tag)
-        env:
-          # Only for the very first publish, before trusted publishing can be configured; remove the
-          # secret afterwards (RELEASING.md).
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           flags="--access public --provenance"
           if [ "${GITHUB_REF_TYPE}" != "tag" ]; then flags="$flags --dry-run"; fi
+          publish() {
+            name=$(node -p "require('./$1/package.json').name")
+            version=$(node -p "require('./$1/package.json').version")
+            if npm view "$name@$version" version >/dev/null 2>&1; then
+              echo "$name@$version is already on npm"
+            else
+              (cd "$1" && npm publish $flags)
+            fi
+          }
           for dir in npm/out/*/; do
             [ "$(basename "$dir")" = marklark ] && continue
-            (cd "$dir" && npm publish $flags)
+            publish "${dir%/}"
           done
-          (cd npm/out/marklark && npm publish $flags)
+          publish npm/out/marklark
 
   # ---- publishing: only for a pushed tag ----
 
@@ -194,7 +202,7 @@ jobs:
 
   github-release:
     if: github.ref_type == 'tag'
-    needs: [check, binaries, wheels, sdist, npm]
+    needs: [check, binaries, wheels, sdist]
     runs-on: ubuntu-latest
     permissions:
       contents: write
