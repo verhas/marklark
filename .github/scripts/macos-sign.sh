@@ -20,8 +20,14 @@ set -euo pipefail
 archives=$1
 wheels=$2
 : "${APPLE_CERT_SHA1:?APPLE_CERT_SHA1 is required}"
+# As copied from Keychain Access the hash has spaces and may be lower case.
+APPLE_CERT_SHA1=$(printf '%s' "$APPLE_CERT_SHA1" | tr -d ' \t\r\n:' | tr '[:lower:]' '[:upper:]')
 work=$(mktemp -d)
-trap 'rm -rf "$work"; [ -n "${keychain:-}" ] && security delete-keychain "$keychain" || true' EXIT
+cleanup() {
+    if [ -n "${keychain:-}" ]; then security delete-keychain "$keychain" 2>/dev/null || true; fi
+    rm -rf "$work"
+}
+trap cleanup EXIT
 
 keychain_args=()
 if [ -n "${APPLE_CERT_P12:-}" ]; then
@@ -30,13 +36,24 @@ if [ -n "${APPLE_CERT_P12:-}" ]; then
     security create-keychain -p "$kc_password" "$keychain"
     security set-keychain-settings -lut 3600 "$keychain"
     security unlock-keychain -p "$kc_password" "$keychain"
-    printf '%s' "$APPLE_CERT_P12" | base64 --decode > "$work/cert.p12"
+    printf '%s' "$APPLE_CERT_P12" | tr -d ' \r\n' | base64 --decode > "$work/cert.p12"
     security import "$work/cert.p12" -k "$keychain" -P "${APPLE_CERT_PASSWORD:-}" -T /usr/bin/codesign
     rm "$work/cert.p12"
     security set-key-partition-list -S apple-tool:,apple: -s -k "$kc_password" "$keychain" > /dev/null
     # codesign needs the keychain in the search list to build the certificate chain.
     security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
+    # The Developer ID G2 intermediate: runner images do not always have it, and without the chain
+    # codesign reports "no identity found".
+    curl -fsSL https://www.apple.com/certificateauthority/DeveloperIDG2CA.cer -o "$work/g2.cer"
+    security import "$work/g2.cer" -k "$keychain" > /dev/null 2>&1 || true
     keychain_args=(--keychain "$keychain")
+    echo "signing identities in the temporary keychain:"
+    security find-identity -v -p codesigning "$keychain"
+    if ! security find-identity -v -p codesigning "$keychain" | grep -q "$APPLE_CERT_SHA1"; then
+        echo "APPLE_CERT_SHA1 does not match the certificate in APPLE_CERT_P12 (listed above):" >&2
+        echo "the hash and the .p12 must be the same certificate." >&2
+        exit 1
+    fi
 fi
 
 sign() {
@@ -75,7 +92,7 @@ if [ "${#signed[@]}" -eq 0 ]; then
 fi
 
 if [ "${NOTARIZE:-1}" != 0 ]; then
-    printf '%s' "$APPLE_API_KEY_P8" | base64 --decode > "$work/key.p8"
+    printf '%s' "$APPLE_API_KEY_P8" | tr -d ' \r\n' | base64 --decode > "$work/key.p8"
     mkdir "$work/submit"
     i=0
     for b in "${signed[@]}"; do i=$((i + 1)); mkdir "$work/submit/$i"; cp "$b" "$work/submit/$i/"; done
