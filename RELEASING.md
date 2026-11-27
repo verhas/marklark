@@ -14,18 +14,14 @@ and Apple Silicon, Windows x86_64.
 
 ## One-time setup
 
-1. **Make the repository public** (or accept that the GitHub Release is visible only to you while the
-   crate and the wheels are public). Note: publishing to crates.io and PyPI makes the source public in
-   any case.
-2. **crates.io.** Create a token at https://crates.io/settings/tokens with the scope `publish-update`,
+1. **crates.io.** Create a token at https://crates.io/settings/tokens with the scope `publish-update`,
    limited to the crate `marklark`. In GitHub: Settings → Environments → create `crates-io`, add the
    secret `CARGO_REGISTRY_TOKEN` there.
-3. **PyPI trusted publishing** (no token): at https://pypi.org/manage/account/publishing/ add a pending
+2. **PyPI trusted publishing** (no token): at https://pypi.org/manage/account/publishing/ add a pending
    publisher — project `marklark`, owner `verhas`, repository `marklark`, workflow `release.yml`,
    environment `pypi`. In GitHub: Settings → Environments → create `pypi`. Optionally require your
    approval on both environments, so every publish waits for a click.
-4. **Remove `publish = false`** from `Cargo.toml`.
-5. **npm.**
+3. **npm.**
    1. Create the account `verhas` and turn on two-factor authentication. The platform packages live in
       the user scope `@verhas/…` (the organisation name `marklark` is taken), so no organisation is needed.
    2. The first publish needs a token, because trusted publishing can only be set up on a package that
@@ -66,6 +62,4 @@ release goes wrong, fix it and release the next patch version.
 into a fresh virtualenv and run), `maturin sdist`, and `actionlint` on the workflow. Cross-platform builds
 only run on GitHub; use the dry run.
 
-Cost: on a private repository, GitHub Actions minutes count against your plan, and macOS runners count
-ten times. One full run is roughly 15–25 jobs-minutes on Linux/Windows and 20 on macOS (≈ 200 billed
-minutes). Public repositories run for free.
+The repository is public, so the workflow's Actions minutes are free.

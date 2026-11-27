@@ -13,10 +13,10 @@ splicing with `generated` guards, host functions, states (§9), inline values (�
 `intent_apply`. CLI: `update`, `check`, `intent-check`, `intent-accept`, `mcp`, `skill`. The guide for agents
 is `docs/agent-guide.md` (compiled into the binary: MCP `guide` tool, resource `marklark://guide`, and
 `marklark skill`); keep it in step with the host functions. `examples/` has documents to try. Not yet: a step limit for
-long-running CODE (deliberately deferred). The crate name is reserved (placeholder `0.0.0` on
-crates.io; the first real release must be a higher version) and `marklark.dev` is registered (renewal due
-2027-11-26). The repository stays
-private for now; a crates.io placeholder must therefore not contain the real source.
+long-running CODE (deliberately deferred). The repository is public (github.com/verhas/marklark).
+Releases go to crates.io, PyPI, npm and GitHub Releases from one tag (`.github/workflows/release.yml`,
+see [RELEASING.md](RELEASING.md)); the version is `0.1.0` (`0.0.0` on crates.io is the old name
+placeholder). `marklark.dev` is registered (renewal due 2027-11-26).
 
 ## Where things stand
 
@@ -40,8 +40,8 @@ placeholders) and ended with the decision to build a new product. Everything dec
    tools) and the deny list applying inside git too.
 2. Use marklark on real documents (mdship's documentation is the natural test bed) and fix what that
    shows.
-3. Later: a step limit for long-running CODE (deferred by the owner); a first real release (`0.1.0` or
-   higher — publishing makes the source public on crates.io).
+3. The first release, `v0.1.0` (RELEASING.md); after it, npm trusted publishing replaces the token.
+4. Later: a step limit for long-running CODE (deferred by the owner).
 
 ## Conventions for this repository
 
