@@ -47,6 +47,18 @@ and Apple Silicon, Windows x86_64.
    Local check: `node npm/build.mjs <version> <dir with release archives> npm/out --partial`, then
    `npm pack` in `npm/out/*` and install the tarballs into a scratch project.
 
+4. **macOS signing.** The `macos-sign` job signs the macOS binaries (in the archives and the wheels;
+   npm reuses the archives) with a Developer ID certificate made only for this CI, with the hardened
+   runtime and a secure timestamp, and notarizes them (`.github/scripts/macos-sign.sh`). GitHub
+   environment `apple`, with you as required reviewer, holds: `APPLE_CERT_P12` (base64 `.p12` of that
+   certificate and its key, key named `marklark CI`), `APPLE_CERT_PASSWORD`, `APPLE_CERT_SHA1` (the
+   certificate is chosen by hash: the name has an accented letter), `APPLE_API_KEY_P8` (base64 App
+   Store Connect API key, role Developer), `APPLE_API_KEY_ID`, `APPLE_API_ISSUER_ID`. Without the
+   secrets a manual run stays unsigned with a warning; a tag fails. If the key leaks, revoke that one
+   certificate (it signs only marklark) and the API key. The certificate expires on 27 Dec 2027.
+   Local test (login keychain, no notarization):
+   `APPLE_CERT_SHA1=<hash> NOTARIZE=0 .github/scripts/macos-sign.sh <archives-dir> <wheels-dir>`.
+
 ## Each release
 
 1. Set `version` in `Cargo.toml` (`0.0.0` is taken by the name placeholder; start at `0.1.0`), run

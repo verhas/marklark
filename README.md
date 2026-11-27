@@ -1,7 +1,6 @@
 # marklark
 
-**Status: working pre-release.** The library, the CLI and the MCP server implement the specification;
-no version has been released yet.
+**Status: first release, 0.1.0.** The library, the CLI and the MCP server implement the specification.
 
 marklark keeps Markdown documents up to date from their environment — source files, data files, other
 parts of the same document — using instructions hidden in HTML comments, so the rendered document is
@@ -40,11 +39,14 @@ when those inputs change.
 
 ## Install
 
-From a clone of this repository:
-
 ```sh
-cargo install --path .
+uv tool install marklark     # or: pipx install marklark / pip install marklark
+npm install -g marklark
+cargo install marklark
 ```
+
+Or download a binary from [GitHub Releases](https://github.com/verhas/marklark/releases). See
+[INSTALL.md](INSTALL.md) for platforms, updating and uninstalling.
 
 ## Use
 
@@ -104,6 +106,7 @@ mdship remains maintained for environments where only `pip` installs are allowed
 
 | File | Contents |
 |---|---|
+| [INSTALL.md](INSTALL.md) | Installing, updating and uninstalling, per channel and platform |
 | [docs/spec.md](docs/spec.md) | The specification: constructs, stamps, states, evaluation model, security |
 | [docs/host-functions.md](docs/host-functions.md) | The host-function library, sized against every mdship feature |
 | [docs/agent-guide.md](docs/agent-guide.md) | The guide for agents: rules, workflow, Starlark subset, host functions, patterns |
