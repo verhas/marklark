@@ -1,0 +1,175 @@
+# Release: push a tag `vX.Y.Z` matching the version in Cargo.toml.
+#
+#   - checks the tag against Cargo.toml, runs the tests and clippy;
+#   - builds the binary for every platform (GitHub Release archives) and the PyPI wheels;
+#   - publishes to PyPI (trusted publishing), crates.io and a GitHub Release.
+#
+# A manual run (Actions → release → Run workflow) builds everything and publishes nothing.
+# See RELEASING.md for the one-time setup.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - id: version
+        name: Version from Cargo.toml (and the tag must match)
+        run: |
+          version=$(cargo metadata --no-deps --format-version 1 | python3 -c 'import sys,json; print(json.load(sys.stdin)["packages"][0]["version"])')
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          if [ "${GITHUB_REF_TYPE}" = "tag" ] && [ "${GITHUB_REF_NAME}" != "v$version" ]; then
+            echo "::error::tag ${GITHUB_REF_NAME} does not match Cargo.toml version $version"
+            exit 1
+          fi
+      - run: cargo test --locked
+      - run: cargo clippy --locked --all-targets -- -D warnings
+
+  binaries:
+    needs: check
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, target: x86_64-unknown-linux-musl, musl: true }
+          - { os: ubuntu-24.04-arm, target: aarch64-unknown-linux-musl, musl: true }
+          - { os: macos-latest, target: aarch64-apple-darwin }
+          - { os: macos-latest, target: x86_64-apple-darwin }
+          - { os: windows-latest, target: x86_64-pc-windows-msvc }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - if: matrix.musl
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+      - run: cargo build --locked --release --target ${{ matrix.target }}
+      - name: Archive
+        shell: bash
+        run: |
+          name="marklark-${{ needs.check.outputs.version }}-${{ matrix.target }}"
+          mkdir "$name"
+          cp README.md LICENSE* "$name"/ 2>/dev/null || cp README.md "$name"/
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            cp "target/${{ matrix.target }}/release/marklark.exe" "$name"/
+            7z a "$name.zip" "$name" > /dev/null
+            sha256sum "$name.zip" > "$name.zip.sha256"
+          else
+            cp "target/${{ matrix.target }}/release/marklark" "$name"/
+            tar czf "$name.tar.gz" "$name"
+            shasum -a 256 "$name.tar.gz" > "$name.tar.gz.sha256"
+          fi
+      - uses: actions/upload-artifact@v7
+        with:
+          name: binary-${{ matrix.target }}
+          path: |
+            marklark-*.tar.gz*
+            marklark-*.zip*
+
+  wheels:
+    needs: check
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, target: x86_64, manylinux: auto }
+          - { os: ubuntu-latest, target: aarch64, manylinux: auto }
+          - { os: ubuntu-latest, target: x86_64, manylinux: musllinux_1_2 }
+          - { os: ubuntu-latest, target: aarch64, manylinux: musllinux_1_2 }
+          - { os: macos-latest, target: x86_64 }
+          - { os: macos-latest, target: aarch64 }
+          - { os: windows-latest, target: x64 }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: PyO3/maturin-action@v1
+        with:
+          target: ${{ matrix.target }}
+          manylinux: ${{ matrix.manylinux || 'auto' }}
+          args: --release --locked --out dist
+      - uses: actions/upload-artifact@v7
+        with:
+          name: wheel-${{ matrix.os }}-${{ matrix.target }}-${{ matrix.manylinux || 'native' }}
+          path: dist/*.whl
+
+  sdist:
+    needs: check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: PyO3/maturin-action@v1
+        with:
+          command: sdist
+          args: --out dist
+      - uses: actions/upload-artifact@v7
+        with:
+          name: sdist
+          path: dist/*.tar.gz
+
+  # ---- publishing: only for a pushed tag ----
+
+  pypi:
+    if: github.ref_type == 'tag'
+    needs: [check, binaries, wheels, sdist]
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write   # trusted publishing: no PyPI token is stored anywhere
+    steps:
+      # Wheels and the sdist only — never the binary archives.
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: wheel-*
+          path: dist
+          merge-multiple: true
+      - uses: actions/download-artifact@v8
+        with:
+          name: sdist
+          path: dist
+      - uses: pypa/gh-action-pypi-publish@release/v1
+
+  crates:
+    if: github.ref_type == 'tag'
+    needs: [check, binaries, wheels, sdist]
+    runs-on: ubuntu-latest
+    environment: crates-io
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo publish --locked
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+  github-release:
+    if: github.ref_type == 'tag'
+    needs: [check, binaries, wheels, sdist]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: binary-*
+          path: dist
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v3
+        with:
+          files: dist/*
+          generate_release_notes: true

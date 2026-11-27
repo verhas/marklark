@@ -1,0 +1,25 @@
+# Python packaging: `pip install marklark` installs the compiled marklark binary (no Rust needed).
+# maturin builds one wheel per platform from the Cargo project; the version comes from Cargo.toml.
+[build-system]
+requires = ["maturin>=1.7,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "marklark"
+description = "Maintain Markdown documents: humans write intents, agents write hermetic Starlark, marklark runs it deterministically"
+readme = "README.md"
+license = { text = "MIT OR Apache-2.0" }
+requires-python = ">=3.8"
+keywords = ["markdown", "starlark", "documentation", "mcp"]
+classifiers = [
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Programming Language :: Rust",
+    "Topic :: Documentation",
+    "Topic :: Text Processing :: Markup :: Markdown",
+]
+dynamic = ["version"]
+
+[tool.maturin]
+bindings = "bin"
+strip = true
