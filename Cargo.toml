@@ -1,12 +1,12 @@
 [package]
 name = "marklark"
-version = "0.0.0"
+version = "0.1.0"
 edition = "2024"
 description = "Maintain Markdown documents: humans write intents, agents write hermetic Starlark, marklark runs it deterministically"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/verhas/marklark"
-publish = false   # remove for the first release (RELEASING.md)
-exclude = [".github", ".claude"]
+publish = true
+exclude = [".github", ".claude", "npm"]
 
 [lib]
 path = "src/lib.rs"
